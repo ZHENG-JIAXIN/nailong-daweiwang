@@ -1,0 +1,55 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[animation]
+
+compatibility/default_parent_skeleton_in_mesh_instance_3d=true
+
+[application]
+
+config/name="奶龙大胃王"
+run/main_scene="res://Main.tscn"
+config/features=PackedStringArray("4.7", "GL Compatibility")
+
+[autoload]
+
+GameManager="*res://game_manager.gd"
+
+[debug]
+
+gdscript/debug/remote_uri="ws://127.0.0.1:6007"
+
+[display]
+
+window/size/viewport_width=720
+window/size/viewport_height=1280
+window/handheld/orientation="portrait"
+
+[gui]
+
+theme/default_font="res://assets/fonts/simhei.ttf"
+theme/default_theme=""
+
+[preset.0]
+
+name="Web"
+platform="Web"
+runnable=true
+export_filter="all_resources"
+include_filter=""
+exclude_filter=""
+export_path="release/web/index.html"
+encrypt_pck=false
+script_export_mode=2
+
+[preset.0.options]
+
+variant/thread_support=false
+vram_texture_compression/for_mobile=true

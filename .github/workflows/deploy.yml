@@ -1,0 +1,41 @@
+name: Deploy Web to GitHub Pages
+
+# 触发：推送到 main 分支，或手动在 Actions 页点 Run workflow
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 授予 Pages 部署所需权限
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时间只跑一个部署
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      # 把本地已导出的 Web 构建（src/release/web/）作为静态站点发布
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./src/release/web
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,16 @@
+# Netlify 部署配置文件（与 index.html 同目录，拖到 Netlify Drop 时自动生效）
+#
+# 本游戏 Web 预设已锁定「Thread Support = OFF」（单线程导出），
+# 因此理论上不需要 COOP/COEP 跨源隔离响应头，任意静态托管都能直接跑。
+# 下面仅做稳健性兜底：确保 .wasm 以正确 MIME 提供；如需开启多线程，
+# 取消底部注释并重新部署即可。
+
+/*.wasm
+  Content-Type: application/wasm
+
+# 若将来在 Godot 导出里开启 Thread Support / Extensions Support，
+# 必须让服务器返回以下两个头（否则黑屏，报 SharedArrayBuffer 错误）。
+# 取消注释后重新部署：
+# /*
+#   Cross-Origin-Opener-Policy: same-origin
+#   Cross-Origin-Embedder-Policy: require-corp
