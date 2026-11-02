@@ -11,6 +11,7 @@ var bgm_phase: int = 0
 var bgm_on: bool = false
 
 const SR: int = 44100
+const MAX_BGM_FILL: int = 4096  # 单次补填上限，避免单帧 CPU 尖峰（约 93ms @44.1k）
 
 func _ready():
 	gen_sfx = AudioStreamGenerator.new()
@@ -23,7 +24,7 @@ func _ready():
 
 	gen_bgm = AudioStreamGenerator.new()
 	gen_bgm.mix_rate = float(SR)
-	gen_bgm.buffer_length = 0.25
+	gen_bgm.buffer_length = 1.0  # 加长缓冲，单线程 Web 下留足余量防止断流卡顿
 	bgm_player = AudioStreamPlayer.new()
 	bgm_player.stream = gen_bgm
 	add_child(bgm_player)
@@ -34,10 +35,12 @@ func _process(_delta: float):
 		var pb := bgm_player.get_stream_playback() as AudioStreamGeneratorPlayback
 		if pb != null:
 			var avail: int = pb.get_frames_available()
-			if avail > 2048:
+			# 只要还有空闲帧就补填（阈值从 2048 降到 0），并限制单次批量，缓冲始终接近满，杜绝断流
+			if avail > 0:
+				var n: int = mini(avail, MAX_BGM_FILL)
 				var buf := PackedVector2Array()
-				buf.resize(avail)
-				for i in avail:
+				buf.resize(n)
+				for i in n:
 					var t: float = float(bgm_phase) / float(SR)
 					var note: float = bgm_note(t)
 					var s: float = sin(t * note * TAU) * 0.16

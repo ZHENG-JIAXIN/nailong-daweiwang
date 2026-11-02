@@ -10,6 +10,7 @@ var is_predator: bool = false
 var player_ref: Node2D = null
 var chase_speed_mult: float = 1.0
 var base_speed: float = 60.0
+var last_draw_angle: float = 1000.0  # 哨兵值，确保首帧绘制；之后仅在转向时重绘
 
 func _ready():
 	add_to_group("fish")
@@ -41,8 +42,12 @@ func _process(delta: float):
 	var m := 120.0
 	if global_position.x < -m or global_position.x > v.x + m or global_position.y < -m or global_position.y > v.y + m:
 		queue_free()
-	# 鱼形随游动方向转向，每帧重绘
-	queue_redraw()
+		return
+	# 仅在游动方向（角度）发生明显变化时重绘，避免每帧重画多边形+描边（单线程 Web 主线程过载主因）
+	var a := velocity.angle()
+	if abs(a - last_draw_angle) > 0.02:
+		last_draw_angle = a
+		queue_redraw()
 
 func _fill(c: Color, n: int) -> PackedColorArray:
 	var arr := PackedColorArray()
