@@ -123,3 +123,10 @@ func start_bgm():
 func stop_bgm():
 	bgm_on = false
 	bgm_player.stop()
+
+# 浏览器自动播放策略：在用户手势前调用的 play() 会被挂起的 AudioContext 吞掉。
+# 一旦用户首次输入（点击/按键/移动，手势恢复上下文），补一次 play() 确保 BGM 真正出声。
+# 对文件模式与合成兜底模式都生效。
+func _input(_event):
+	if bgm_on and not bgm_player.playing:
+		bgm_player.play()
