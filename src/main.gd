@@ -33,6 +33,10 @@ var score := 0
 var selected_diff: int = 1
 var current_level: int = 0
 var win_mode: bool = false
+var kill_count: int = 0
+var boss_threshold_score: int = 800
+var boss_threshold_kills: int = 25
+var current_boss: Fish = null
 var audio: AudioPlayer
 
 # UI 引用
@@ -43,6 +47,13 @@ var lbl_signin: Label
 var lbl_level: Label
 var lbl_best: Label
 var lbl_user: Label
+var lbl_hp: Label
+var lbl_weapon: Label
+var lbl_ammo: Label
+var boss_bar: Control
+var boss_bar_bg: ColorRect
+var boss_bar_fill: ColorRect
+var boss_bar_label: Label
 var login_center: CenterContainer
 var username_input: LineEdit
 var login_feedback: Label
@@ -125,6 +136,12 @@ func build_ui():
 	hud.add_child(lbl_score)
 	hud.add_child(lbl_coins)
 	hud.add_child(lbl_level)
+	lbl_hp = mk_label("生命: 100/100", 20, Color(0.8, 0.12, 0.12))
+	lbl_weapon = mk_label("武器: M4A1 突击步枪", 20, Color(0.1, 0.2, 0.35))
+	lbl_ammo = mk_label("弹药: 25/25", 20, Color(0.1, 0.2, 0.35))
+	hud.add_child(lbl_hp)
+	hud.add_child(lbl_weapon)
+	hud.add_child(lbl_ammo)
 
 	# 菜单
 	menu_center = CenterContainer.new()
@@ -254,8 +271,34 @@ func build_ui():
 	level_banner_timer.timeout.connect(_on_banner_hide)
 	add_child(level_banner_timer)
 
+	# BOSS 血条（顶部居中，默认隐藏）
+	boss_bar = Control.new()
+	boss_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	boss_bar.visible = false
+	ui.add_child(boss_bar)
+	var bw: float = 420.0
+	var bx: float = get_viewport_rect().size.x * 0.5 - bw * 0.5
+	var by: float = 84.0
+	boss_bar_bg = ColorRect.new()
+	boss_bar_bg.color = Color(0.0, 0.0, 0.0, 0.55)
+	boss_bar_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	boss_bar_bg.position = Vector2(bx, by)
+	boss_bar_bg.size = Vector2(bw, 16.0)
+	boss_bar.add_child(boss_bar_bg)
+	boss_bar_fill = ColorRect.new()
+	boss_bar_fill.color = Color(1.0, 0.25, 0.25)
+	boss_bar_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	boss_bar_fill.position = Vector2(bx, by)
+	boss_bar_fill.size = Vector2(bw, 16.0)
+	boss_bar.add_child(boss_bar_fill)
+	boss_bar_label = mk_label("", 20, Color(1.0, 0.92, 0.55))
+	boss_bar_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	boss_bar_label.position = Vector2(bx, by - 28.0)
+	boss_bar_label.size = Vector2(bw, 26.0)
+	boss_bar.add_child(boss_bar_label)
+
 	# 游戏内提示 & 调试标签
-	hint_label = mk_label("拖拽 / 移动鼠标控制奶龙，吃小的长大，躲大的！", 20, Color(0.1, 0.2, 0.35))
+	hint_label = mk_label("移动鼠标控制奶龙 · 左键开火 · 1-4 切换武器 · R 换弹 · 吃小的长大，用武器清掉大的！", 18, Color(0.1, 0.2, 0.35))
 	hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	hint_label.offset_top = -56
@@ -315,6 +358,7 @@ func build_ui():
 func mk_label(text: String, size: int, color: Color) -> Label:
 	var l := Label.new()
 	l.text = text
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", color)
 	return l
@@ -366,6 +410,7 @@ func refresh_hud():
 	lbl_score.text = "分数: %d / %d" % [score, int(lvl["target"])]
 	lbl_coins.text = "奶龙币: %d" % GameManager.coins
 	lbl_level.text = "关卡 %d/%d  %s" % [current_level + 1, LEVELS.size(), lvl["name"]]
+	lbl_hp.text = "生命: %d/%d" % [int(maxf(0.0, player.hp)), int(player.max_hp)]
 
 func show_menu():
 	state = "menu"
@@ -448,6 +493,12 @@ func start_game():
 	player.area_entered.connect(_on_player_area_entered)
 	add_child(player)
 	score = 0
+	kill_count = 0
+	boss_threshold_score = 800
+	boss_threshold_kills = 25
+	current_boss = null
+	if boss_bar:
+		boss_bar.visible = false
 	state = "playing"
 	hud.visible = true
 	hint_label.visible = true
@@ -465,7 +516,7 @@ func start_game():
 func spawn_fish():
 	if state != "playing":
 		return
-	var f := FishScript.new()
+	var f: Fish = FishScript.new()
 	fish_layer.add_child(f)
 	var v := get_viewport_rect().size
 	var edge: int = randi() % 4
@@ -495,6 +546,7 @@ func spawn_fish():
 	var ang: float = randf() * TAU
 	var vel := Vector2(cos(ang), sin(ang)) * base_spd
 	f.setup(r, vel, col)
+	f.died.connect(_on_fish_died)
 	if is_pred:
 		f.is_predator = true
 		f.player_ref = player
@@ -515,7 +567,10 @@ func _on_player_area_entered(area):
 			refresh_hud()
 			check_progress()
 		elif fr > player.radius * 1.15:
-			game_over()
+			player.take_damage(fish.contact_damage)
+			refresh_hud()
+			if player.hp <= 0.0:
+				game_over()
 
 func check_progress():
 	var lvl: Dictionary = LEVELS[current_level]
@@ -538,11 +593,79 @@ func show_level_banner(text: String):
 func _on_banner_hide():
 	level_banner.visible = false
 
+func _on_fish_died(fish: Fish):
+	if fish == null:
+		return
+	if fish.is_boss:
+		score += 400
+		GameManager.add_coins(30)
+		current_boss = null
+		if boss_bar:
+			boss_bar.visible = false
+		boss_threshold_score = score + 1000
+		boss_threshold_kills = kill_count + 30
+	else:
+		var ks: int = 5 + int(fish.radius) * 2
+		score += ks
+		GameManager.add_coins(1 + int(fish.radius / 10))
+	kill_count += 1
+	refresh_hud()
+	check_progress()
+	_try_spawn_boss()
+
+func _try_spawn_boss():
+	if state != "playing":
+		return
+	if current_boss != null and not is_instance_valid(current_boss):
+		current_boss = null
+	if current_boss != null:
+		return
+	if score >= boss_threshold_score or kill_count >= boss_threshold_kills:
+		spawn_boss()
+
+func spawn_boss():
+	if player == null or not is_instance_valid(player):
+		return
+	var f: Fish = FishScript.new()
+	var t: int = randi() % Fish.BOSS_TYPES.size()
+	f.make_boss(t)
+	fish_layer.add_child(f)
+	var v: Vector2 = get_viewport_rect().size
+	f.global_position = Vector2(randf_range(v.x * 0.2, v.x * 0.8), -60.0)
+	f.player_ref = player
+	f.died.connect(_on_fish_died)
+	current_boss = f
+	if boss_bar:
+		boss_bar.visible = true
+	show_level_banner("⚠ BOSS 出现：" + f.boss_name)
+
+func update_combat_hud():
+	if player == null:
+		return
+	lbl_hp.text = "生命: %d/%d" % [int(maxf(0.0, player.hp)), int(player.max_hp)]
+	var w: Dictionary = player.WEAPONS[player.weapon_index]
+	if w["type"] == "ranged":
+		var st: String = "（换弹中…）" if player.reloading else ""
+		lbl_ammo.text = "弹药: %d/%d %s" % [player.ammo, int(w["mag"]), st]
+	else:
+		lbl_ammo.text = "弹药: 近战（无限）"
+	lbl_weapon.text = "武器: " + str(w["name"]) + "  [1-4切换 R换弹]"
+	if current_boss != null and is_instance_valid(current_boss):
+		boss_bar.visible = true
+		var ratio: float = clampf(current_boss.hp / current_boss.max_hp, 0.0, 1.0)
+		boss_bar_fill.size.x = 420.0 * ratio
+		boss_bar_label.text = current_boss.boss_name + "  %.0f%%" % (ratio * 100.0)
+	else:
+		boss_bar.visible = false
+
 func game_over():
 	if win_mode:
 		return
 	state = "gameover"
 	spawn_timer.stop()
+	if boss_bar:
+		boss_bar.visible = false
+	current_boss = null
 	GameManager.record_score(score)
 	lbl_over.text = "游戏结束\n分数: %d\n最高分: %d" % [score, GameManager.best_score]
 	over_center.visible = true
@@ -557,6 +680,9 @@ func game_win():
 	state = "gameover"
 	win_mode = true
 	spawn_timer.stop()
+	if boss_bar:
+		boss_bar.visible = false
+	current_boss = null
 	GameManager.record_score(score)
 	lbl_over.text = "通关啦！\n总分: %d\n最高分: %d" % [score, GameManager.best_score]
 	over_center.visible = true
@@ -593,6 +719,8 @@ func _on_quiz_close():
 	show_menu()
 
 func _process(_delta: float):
+	if state == "playing" and player != null:
+		update_combat_hud()
 	if debug_label and state == "playing":
 		var fc := fish_layer.get_child_count()
 		var pr := 0

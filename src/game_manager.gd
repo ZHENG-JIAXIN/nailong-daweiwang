@@ -178,6 +178,10 @@ func pay_entry(cost: int = ENTRY_FEE) -> bool:
 	save_data()
 	return true
 
+func add_coins(amount: int):
+	coins += amount
+	save_data()
+
 func can_quiz() -> bool:
 	var t := today()
 	if quiz_date != t:
