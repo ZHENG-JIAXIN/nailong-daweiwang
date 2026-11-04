@@ -13,9 +13,13 @@ var gen_bgm: AudioStreamGenerator
 var bgm_phase: int = 0
 var bgm_on: bool = false
 var bgm_file_mode: bool = false  # true=BGM 走文件播放；false=回退程序化合成
+var _bgm_kicked: bool = false     # 是否已在用户手势后强制重启过 BGM（防重复重启）
 
 const SR: int = 44100
 const MAX_BGM_FILL: int = 4096  # 单次补填上限，避免单帧 CPU 尖峰（约 93ms @44.1k）
+# BGM 音源：用 preload 在导出时解析路径——Web 包里运行时 load() 常取不到资源，会静默回退到合成音；preload 最可靠。
+# 注意用 var 而非 const：GDScript 不允许修改常量资源的属性（如 loop_mode），var 可正常设置循环。
+var bgm_stream: AudioStream = preload("res://assets/audio/bgm.wav")
 
 func _ready():
 	# SFX：程序化（吃鱼/死亡短音，开销极低，保留原逻辑）
@@ -27,34 +31,21 @@ func _ready():
 	add_child(sfx_player)
 	sfx_player.play()
 
-	# BGM：先尝试加载音频文件；失败则回退程序化合成
+	# BGM：播放导入的音频文件（preload 已在导出时解析，Web 下可靠）；若资源缺失则回退程序化合成
 	bgm_player = AudioStreamPlayer.new()
 	add_child(bgm_player)
-	var bgm_stream: AudioStream = _load_bgm_file()
 	if bgm_stream != null:
 		bgm_file_mode = true
 		bgm_player.stream = bgm_stream
-		# 循环播放：不同格式循环属性不同，分别处理
-		if bgm_stream is AudioStreamOggVorbis or bgm_stream is AudioStreamMP3:
-			bgm_stream.loop = true
-		elif bgm_stream is AudioStreamWAV:
-			bgm_stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		var wav := bgm_stream as AudioStreamWAV
+		if wav != null:
+			wav.loop_mode = AudioStreamWAV.LOOP_FORWARD
 	else:
-		# 回退：实时合成（缓冲加长，单线程下留足余量）
+		# 兜底：实时合成（缓冲加长，单线程下留足余量）
 		gen_bgm = AudioStreamGenerator.new()
 		gen_bgm.mix_rate = float(SR)
 		gen_bgm.buffer_length = 1.0
 		bgm_player.stream = gen_bgm
-
-# 依次尝试常见格式；把音轨丢进 res://assets/audio/bgm.{ogg,mp3,wav} 即生效
-func _load_bgm_file() -> AudioStream:
-	for ext: String in ["ogg", "mp3", "wav"]:
-		var path := "res://assets/audio/bgm." + ext
-		if ResourceLoader.exists(path):
-			var res := load(path)
-			if res is AudioStream:
-				return res
-	return null
 
 func _process(_delta: float):
 	# 仅回退合成模式需主线程补填；文件模式完全由音频后端解码，此处空转
@@ -116,17 +107,28 @@ func play_death():
 
 func start_bgm():
 	bgm_on = true
-	# 文件模式：若尚未播放则开始（循环已在加载时设置）；合成模式：开启主线程补填
-	if not bgm_player.playing:
-		bgm_player.play()
+	# 强制从头重启：确保在 AudioContext 已恢复（有用户手势）后真正出声。
+	# 浏览器策略下，早先在挂起上下文里的 play() 会静音但把 playing 置真，必须 stop 后重放才能出声。
+	bgm_player.stop()
+	bgm_player.play()
 
 func stop_bgm():
 	bgm_on = false
 	bgm_player.stop()
 
-# 浏览器自动播放策略：在用户手势前调用的 play() 会被挂起的 AudioContext 吞掉。
-# 一旦用户首次输入（点击/按键/移动，手势恢复上下文），补一次 play() 确保 BGM 真正出声。
-# 对文件模式与合成兜底模式都生效。
-func _input(_event):
-	if bgm_on and not bgm_player.playing:
+# 浏览器自动播放策略兜底：首个「真实手势」（鼠标按下/按键/触摸）后，再强制重启一次 BGM。
+# 只在第一次触发，避免每个输入都重头播放。对文件模式与合成兜底模式都生效。
+func _input(event: InputEvent):
+	if not bgm_on or _bgm_kicked:
+		return
+	var gesture := false
+	if event is InputEventMouseButton:
+		gesture = (event as InputEventMouseButton).pressed
+	elif event is InputEventKey:
+		gesture = (event as InputEventKey).pressed
+	elif event is InputEventScreenTouch:
+		gesture = (event as InputEventScreenTouch).pressed
+	if gesture:
+		_bgm_kicked = true
+		bgm_player.stop()
 		bgm_player.play()
