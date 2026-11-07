@@ -40,3 +40,29 @@
 1. Godot 打开项目 → 重新导出 Web（Export Project，覆盖旧包）
 2. `git add . && git commit -m "feat: 角色/武器/BOSS/增益战斗系统" && git push`
 3. GitHub Actions 变绿后，浏览器**硬刷新**（Ctrl+F5）验证
+
+---
+
+## 追加：移动端加载优化（Netlify 预压缩 wasm）
+
+**问题**：GitHub Pages 首包 45 MB，`index.wasm` 38 MB 无压缩传输，手机加载巨慢。
+
+**方案**（配置已落地，待你在 Netlify 侧点几下）：把 wasm 预压缩成 `index.wasm.gz`
+（10,084,297 B，约 9.6 MB），用 Netlify 的 200 重写 + `Content-Encoding: gzip`
+让浏览器自动解压，URL 仍是 `/index.wasm`，**Godot 侧零改动**。
+
+| 文件 | 状态 | 作用 |
+|------|------|------|
+| `src/release/web/index.wasm.gz` | 新增 | 预压缩体，38 MB → 9.6 MB（省约 29.4 MB） |
+| `netlify.toml` | 新增 | publish 目录、自动重生成 gz、重写规则、响应头与缓存策略 |
+| `src/release/web/_redirects` | 新增 | 与 netlify.toml 镜像的 `200!` 重写 |
+| `src/release/web/_headers` | 改写为纯注释 | 响应头统一收敛到 netlify.toml，避免 `gzip, gzip` 双重编码 |
+
+**关键约束**：必须用 Git 连接部署，不能用 Netlify Drop；`force = true` / `200!` 不能省；
+`Content-Encoding` 只在 netlify.toml 声明一处。
+
+**已知偏差**：`fileSizes` 仍按未压缩字节计，进度条偏保守（仅显示问题）；
+每次重新导出 Web 后需把 `index.html` 的 `experimentalVK` 改回 `true`（手机虚拟键盘）。
+
+**质量门**：CONCERNS → 配置阻塞项已解除，待用户侧 Netlify 授权与线上
+`Content-Encoding` 验证后转 PASS。

@@ -1,0 +1,53 @@
+# 奶龙大胃王 · Web 版 Netlify 部署配置
+# 目的：把 38 MB 的 index.wasm 以预压缩 gzip（约 9.6 MB）传输，解决手机首包加载巨慢。
+# 部署方式：必须用「Import from Git / Git 连接」，不要用 Netlify Drop
+# （Drop 只上传 publish 目录，读不到仓库根目录的 netlify.toml，压缩规则会全部失效）。
+
+[build]
+  publish = "src/release/web"
+  # 每次部署自动重新生成预压缩体：避免以后在 Godot 重新导出 Web 后，
+  # 忘记同步 index.wasm.gz，导致线上拿到旧 wasm。
+  command = "gzip -k -9 -f src/release/web/index.wasm && ls -l src/release/web/index.wasm.gz"
+
+# ---------------------------------------------------------------------------
+# Godot 加载器固定请求 /index.wasm。用 200 重写指向预压缩体，浏览器 URL 不变，
+# 因此不需要改动 index.html / index.js（Godot 重新导出也不会把配置覆盖掉）。
+# force = true 必须保留：/index.wasm 是真实存在的文件，Netlify 默认不重写已存在的 URL。
+# ---------------------------------------------------------------------------
+[[redirects]]
+  from = "/index.wasm"
+  to = "/index.wasm.gz"
+  status = 200
+  force = true
+
+# ---------------------------------------------------------------------------
+# 用一条 /index.wasm* 通配规则同时覆盖「原始请求路径 /index.wasm」与
+# 「重写目标路径 /index.wasm.gz」，避免 Netlify 按不同路径匹配 header 时遗漏；
+# 同时避免写两条规则产生重复的 Content-Encoding: gzip, gzip
+# （浏览器会误判为双重压缩，解压一次后仍是 gzip 字节，WASM 编译失败）。
+# ---------------------------------------------------------------------------
+[[headers]]
+  for = "/index.wasm*"
+  [headers.values]
+    Content-Type = "application/wasm"
+    Content-Encoding = "gzip"
+    Cache-Control = "public, max-age=604800"
+
+# 入口 HTML 每次回源校验。历史踩过「旧 HTML + 新 pck」版本错配，缓存不能长。
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+# 资源包随每次导出变化，短缓存。
+[[headers]]
+  for = "/index.pck"
+  [headers.values]
+    Content-Type = "application/octet-stream"
+    Cache-Control = "public, max-age=600"
+
+# 运行时脚本：一天缓存。
+[[headers]]
+  for = "/index.js"
+  [headers.values]
+    Cache-Control = "public, max-age=86400"

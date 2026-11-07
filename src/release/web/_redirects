@@ -1,0 +1,7 @@
+# 与项目根 netlify.toml 的 [[redirects]] 保持一致（publish 目录内的镜像兜底）。
+# 200! 中的 ! 等价于 force = true：/index.wasm 是真实文件，默认不重写。
+#
+# 重要：本文件必须与仓库根目录的 netlify.toml 搭配使用（Git 连接部署）。
+# 若改用 Netlify Drop 拖拽部署，请先删除本文件——Drop 读不到 netlify.toml，
+# 浏览器会拿到没有 Content-Encoding 声明的 gzip 字节，WASM 编译失败、白屏。
+/index.wasm   /index.wasm.gz   200!

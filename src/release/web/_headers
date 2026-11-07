@@ -1,16 +1,16 @@
-# Netlify 部署配置文件（与 index.html 同目录，拖到 Netlify Drop 时自动生效）
+# 本文件刻意不声明任何响应头。
 #
-# 本游戏 Web 预设已锁定「Thread Support = OFF」（单线程导出），
-# 因此理论上不需要 COOP/COEP 跨源隔离响应头，任意静态托管都能直接跑。
-# 下面仅做稳健性兜底：确保 .wasm 以正确 MIME 提供；如需开启多线程，
-# 取消底部注释并重新部署即可。
-
-/*.wasm
-  Content-Type: application/wasm
-
-# 若将来在 Godot 导出里开启 Thread Support / Extensions Support，
-# 必须让服务器返回以下两个头（否则黑屏，报 SharedArrayBuffer 错误）。
-# 取消注释后重新部署：
-# /*
+# 所有 header（Content-Encoding / Content-Type / Cache-Control）统一在
+# 仓库根目录的 netlify.toml [[headers]] 中配置。原因是：Netlify 会合并
+# _headers 与 netlify.toml 的规则，如果两处都声明 Content-Encoding: gzip，
+# 可能合并成 "gzip, gzip"，浏览器会按「被 gzip 压缩了两次」处理，
+# 解压一次后仍是 gzip 字节，WASM 编译失败。
+#
+# 历史：本文件最初用于 Netlify Drop 部署（只配置 .wasm 的 MIME）。
+# 现方案改为 Git 连接部署，因为 netlify.toml 位于仓库根目录，
+# Drop 只上传 publish 目录（src/release/web），读不到它。
+#
+# 单线程导出（Thread Support = OFF）不需要 COOP/COEP 跨源隔离头；
+# 若将来开启多线程，需在所有响应上加：
 #   Cross-Origin-Opener-Policy: same-origin
 #   Cross-Origin-Embedder-Policy: require-corp
