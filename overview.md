@@ -64,5 +64,43 @@
 **已知偏差**：`fileSizes` 仍按未压缩字节计，进度条偏保守（仅显示问题）；
 每次重新导出 Web 后需把 `index.html` 的 `experimentalVK` 改回 `true`（手机虚拟键盘）。
 
-**质量门**：CONCERNS → 配置阻塞项已解除，待用户侧 Netlify 授权与线上
-`Content-Encoding` 验证后转 PASS。
+**质量门：PASS**（2026-11-07 线上验证完成）
+
+- 站点：`https://willowy-horse-183745.netlify.app/`，已设为 Public
+  （原为团队默认 Private，匿名访问会 401 "Login Redirect"）
+- `/index.wasm` 带 `Accept-Encoding` 时返回 `Content-Encoding: gzip`、
+  `Content-Length: 10084297`、`Content-Type: application/wasm`；
+  不带时自动解压回原始 wasm（Netlify 对 `.gz` 文件的原生内容协商）
+- 浏览器实收 9.6 MB（原 38 MB）；`experimentalVK: true`、
+  `index.pck` 6403760、200 重写（Etag 一致）均已确认
+- 生效机制与预期不同：`netlify.toml` 里自定义的那条 `Content-Encoding`
+  实际被 Netlify 忽略，属冗余配置，建议下次改动时顺手删除
+- 剩余：用户侧手机实测加载速度与登录框输入手感
+
+---
+
+## 追加：双端输入分离（方案 A · 2026-11-09）
+
+**问题**：移动、瞄准、开火共用同一个鼠标/触摸位置，角色永远朝鼠标跑，无法「边退边打」。
+
+**方案**：三路解耦——移动走按键，瞄准用鼠标（PC）/右半屏触摸（移动端），开火用左键（PC）/右半屏按住（移动端）。
+
+| 文件 | 改动 |
+|---|---|
+| `design/gdd/input-ux-spec.md` | **新增** UX 规格：输入映射表、屏幕按键布局、边界状态表、验收标准 |
+| `src/player.gd` | 删 `target` 追点模型；移动改为 `键盘向量 + pad_dir` 合成并归一化；瞄准支持触摸优先；开火拆 `firing`/`touch_firing` 两路 |
+| `src/main.gd` | 新增左下角 W/A/S/D 可按住按钮（按下高亮、斜向叠加）；删「鼠标写 target」；右半屏触摸瞄准+开火；菜单/登录/结算隐藏并清空；hint 文案更新 |
+| `src/project.godot` | **不需要改**：`emulate_mouse_from_touch` 是 Godot 默认开启项（`true`），手动写入会被编辑器清理 |
+
+**关键设计**：屏幕按钮用普通 `Button`（PC 鼠标可按、移动端触摸可按），走 `button_down`/`button_up`；左 45% 屏宽留给方向键并用 `_point_over_pad()` 过滤，避免按方向键误触开火；松开事件无条件复位，避免「键内按下、键外松开」卡住持续开火。
+
+**质量门：CONCERNS** — 本机无 Godot CLI，无法无头语法检查。阻塞项：
+① 本机 Godot 打开确认无 parse error
+② 按 UX 规格 §7 做 PC / 移动端验收
+③ 重新导出 Web 并提交 `index.pck` + `index.html`
+
+**已知风险与缓解**：
+- `export_presets.cfg` 的 `html/experimental_virtual_keyboard=true` 已开启，重新导出会**自动**带上 `experimentalVK:true`，无需手动改
+- 导出后本地 `index.wasm.gz` 会过时，但 Netlify build command 每次部署自动重生成，线上不受影响
+- 移动端暂不提供切武器/换弹屏幕键（远程空仓自动换弹、近战无弹药）
+- **待补**：Godot 的「触摸转鼠标」只跟随第一根手指。若玩家先按住右侧开火、再用左手按方向键，第二指不生成鼠标事件，方向键可能无响应。缓解方案是在 `main.gd` 里按 `InputEventScreenTouch.index` 直接映射左侧方向，不依赖 Button 的鼠标模拟

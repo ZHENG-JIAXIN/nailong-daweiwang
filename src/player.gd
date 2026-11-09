@@ -1,13 +1,12 @@
 extends Area2D
 class_name Player
-# Player —— 鼠标跟随移动、吞噬成长、生命值、武器系统、角色增益
+# Player —— 按键移动(WASD/方向键/屏幕方向键) + 鼠标或触摸瞄准、吞噬成长、生命值、武器系统、角色增益
 # 起草：engineering-lead 方法论（主理人代笔）。路径 res://player.gd
 
 const BulletScript := preload("res://bullet.gd")
 
 var radius: float = 20.0
 var speed: float = 260.0
-var target: Vector2 = Vector2.ZERO
 var dead: bool = false
 var body_color: Color = Color(1.0, 0.85, 0.4)
 var horn_color: Color = Color(1.0, 0.72, 0.32)
@@ -24,7 +23,12 @@ var reloading: bool = false
 var reload_timer: float = 0.0
 var rof_timer: float = 0.0
 var melee_cd: float = 0.0
-var _firing: bool = false
+# 输入三路解耦：移动(键盘 + pad_dir) / 瞄准(鼠标或触摸) / 开火(PC 左键或触摸)
+var pad_dir: Vector2 = Vector2.ZERO
+var firing: bool = false
+var touch_firing: bool = false
+var touch_aim: bool = false
+var touch_aim_pos: Vector2 = Vector2.ZERO
 var aim_dir: Vector2 = Vector2(1.0, 0.0)
 var _iframes: float = 0.0
 var _swing_timer: float = 0.0
@@ -189,7 +193,6 @@ func _ready():
 	cs.name = "Col"
 	cs.shape = shape
 	add_child(cs)
-	target = global_position
 	queue_redraw()
 
 func set_radius(r: float):
@@ -299,9 +302,11 @@ func _fire_loop():
 func _process(delta: float):
 	if dead:
 		return
-	# 瞄准方向跟随鼠标
-	var gm: Vector2 = get_global_mouse_position()
-	var to_m: Vector2 = gm - global_position
+	# 瞄准：移动端触摸优先，PC 用鼠标；触摸源出现后不再被鼠标覆盖
+	var aim_point: Vector2 = get_global_mouse_position()
+	if touch_aim:
+		aim_point = touch_aim_pos
+	var to_m: Vector2 = aim_point - global_position
 	if to_m.length() > 1.0:
 		aim_dir = to_m.normalized()
 	# 计时器
@@ -321,18 +326,25 @@ func _process(delta: float):
 			reloading = false
 			ammo = int(WEAPONS[weapon_index]["mag"])
 			queue_redraw()
-	# 移动
-	var to_t: Vector2 = target - global_position
-	var step: float = speed * delta
-	if to_t.length() <= step:
-		global_position = target
-	else:
-		global_position += to_t.normalized() * step
+	# 移动：键盘 WASD/方向键 + 屏幕方向键合成，斜向归一化，按住持续移动
+	var kb: Vector2 = Vector2.ZERO
+	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):
+		kb.y -= 1.0
+	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
+		kb.y += 1.0
+	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
+		kb.x -= 1.0
+	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
+		kb.x += 1.0
+	var mv: Vector2 = kb + pad_dir
+	if mv.length() > 1.0:
+		mv = mv.normalized()
+	global_position += mv * speed * delta
 	var v: Vector2 = get_viewport_rect().size
 	global_position.x = clampf(global_position.x, radius, v.x - radius)
 	global_position.y = clampf(global_position.y, radius, v.y - radius)
-	# 开火
-	if _firing:
+	# 开火：PC 左键与移动端触摸互不覆盖
+	if firing or touch_firing:
 		_fire_loop()
 
 func _input(event):
@@ -345,9 +357,7 @@ func _input(event):
 			KEY_3: switch_weapon(2)
 			KEY_4: switch_weapon(3)
 			KEY_R: start_reload()
-	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			_firing = event.pressed
+	# 鼠标/触摸开火统一交给 main.gd，避免屏幕方向键误触开火
 
 func _draw():
 	if char_tex == null:

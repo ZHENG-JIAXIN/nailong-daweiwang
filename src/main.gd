@@ -77,6 +77,14 @@ var level_banner: CenterContainer
 var lbl_level_banner: Label
 var level_banner_timer: Timer
 
+# 双端输入：左下角可按住的 W/A/S/D 屏幕方向键
+var pad: Control
+var pad_buttons: Dictionary = {}
+var pad_w: bool = false
+var pad_a: bool = false
+var pad_s: bool = false
+var pad_d: bool = false
+
 func _ready():
 	# 强制全局字体：直接 preload 静态 TTF(simhei，已烘焙 556 中文字形)并代码建主题。
 	# 同时挂到根窗口与 UI 控件，双保险确保 UI 控件继承到中文字体。
@@ -298,7 +306,7 @@ func build_ui():
 	boss_bar.add_child(boss_bar_label)
 
 	# 游戏内提示 & 调试标签
-	hint_label = mk_label("移动鼠标控制奶龙 · 左键开火 · 1-4 切换武器 · R 换弹 · 吃小的长大，用武器清掉大的！", 18, Color(0.1, 0.2, 0.35))
+	hint_label = mk_label("WASD/方向键或左下按键移动 · 鼠标瞄准 · 左键开火 · 1-4 切武器 · R 换弹｜手机：右侧触摸瞄准并开火", 18, Color(0.1, 0.2, 0.35))
 	hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	hint_label.offset_top = -56
@@ -354,6 +362,123 @@ func build_ui():
 	spawn_timer.wait_time = 0.55
 	spawn_timer.timeout.connect(spawn_fish)
 	add_child(spawn_timer)
+	build_move_pad()
+
+# 双端输入：左下角「可按住」的 W/A/S/D 屏幕方向键。
+# PC 用鼠标按住、移动端用触摸按住，两者都走 button_down / button_up。
+func build_move_pad():
+	pad = Control.new()
+	pad.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pad.anchor_left = 0.0
+	pad.anchor_top = 1.0
+	pad.anchor_right = 0.0
+	pad.anchor_bottom = 1.0
+	pad.offset_left = 20.0
+	pad.offset_top = -200.0
+	pad.offset_right = 260.0
+	pad.offset_bottom = -20.0
+	pad.visible = false
+	ui.add_child(pad)
+	var keys: Array[String] = ["W", "A", "S", "D"]
+	var px: Array[float] = [82.0, 0.0, 82.0, 164.0]
+	var py: Array[float] = [0.0, 92.0, 92.0, 92.0]
+	for i in range(4):
+		var k: String = keys[i]
+		var b: Button = Button.new()
+		b.text = k
+		b.size = Vector2(76.0, 76.0)
+		b.custom_minimum_size = Vector2(76.0, 76.0)
+		b.position = Vector2(px[i], py[i])
+		b.mouse_filter = Control.MOUSE_FILTER_STOP
+		b.add_theme_font_size_override("font_size", 30)
+		b.button_down.connect(_on_pad_down.bind(k))
+		b.button_up.connect(_on_pad_up.bind(k))
+		pad.add_child(b)
+		pad_buttons[k] = b
+
+func _on_pad_down(k: String):
+	match k:
+		"W": pad_w = true
+		"A": pad_a = true
+		"S": pad_s = true
+		"D": pad_d = true
+	_set_pad_visual(k, true)
+	_sync_pad_dir()
+
+func _on_pad_up(k: String):
+	match k:
+		"W": pad_w = false
+		"A": pad_a = false
+		"S": pad_s = false
+		"D": pad_d = false
+	_set_pad_visual(k, false)
+	_sync_pad_dir()
+
+func _set_pad_visual(k: String, on: bool):
+	if not pad_buttons.has(k):
+		return
+	var b: Button = pad_buttons[k]
+	if b != null:
+		if on:
+			b.modulate = Color(1.0, 0.78, 0.28)
+		else:
+			b.modulate = Color.WHITE
+
+func _sync_pad_dir():
+	var d: Vector2 = Vector2.ZERO
+	if pad_w:
+		d.y -= 1.0
+	if pad_s:
+		d.y += 1.0
+	if pad_a:
+		d.x -= 1.0
+	if pad_d:
+		d.x += 1.0
+	if player != null and is_instance_valid(player):
+		player.pad_dir = d
+
+func _clear_pad():
+	pad_w = false
+	pad_a = false
+	pad_s = false
+	pad_d = false
+	for k in pad_buttons:
+		_set_pad_visual(str(k), false)
+	_sync_pad_dir()
+
+func _hide_pad():
+	if pad == null:
+		return
+	pad.visible = false
+	_clear_pad()
+
+func _point_over_pad(p: Vector2) -> bool:
+	if pad == null or not pad.visible:
+		return false
+	return pad.get_global_rect().has_point(p)
+
+func _handle_touch_aim(event: InputEvent):
+	var p: Vector2 = Vector2.ZERO
+	var pressed: bool = true
+	if event is InputEventScreenTouch:
+		var st: InputEventScreenTouch = event as InputEventScreenTouch
+		p = st.position
+		pressed = st.pressed
+	elif event is InputEventScreenDrag:
+		var sd: InputEventScreenDrag = event as InputEventScreenDrag
+		p = sd.position
+	else:
+		return
+	# 松手一律停火，避免落在左侧区域时漏掉复位
+	if not pressed:
+		player.touch_firing = false
+		return
+	# 左侧 45% 留给方向键，右侧才用于瞄准 + 开火
+	if p.x < get_viewport_rect().size.x * 0.45:
+		return
+	player.touch_aim = true
+	player.touch_aim_pos = p
+	player.touch_firing = true
 
 func mk_label(text: String, size: int, color: Color) -> Label:
 	var l := Label.new()
@@ -416,6 +541,7 @@ func show_menu():
 	state = "menu"
 	hud.visible = false
 	hint_label.visible = false
+	_hide_pad()
 	level_banner.visible = false
 	login_center.visible = false
 	menu_center.visible = true
@@ -425,6 +551,7 @@ func show_menu():
 func show_login():
 	state = "login"
 	hud.visible = false
+	_hide_pad()
 	menu_center.visible = false
 	over_center.visible = false
 	login_center.visible = true
@@ -489,7 +616,6 @@ func start_game():
 	player = PlayerScript.new()
 	player.apply_character(GameManager.selected_char)
 	player.global_position = get_viewport_rect().size * 0.5
-	player.target = player.global_position
 	player.area_entered.connect(_on_player_area_entered)
 	add_child(player)
 	score = 0
@@ -502,6 +628,8 @@ func start_game():
 	state = "playing"
 	hud.visible = true
 	hint_label.visible = true
+	pad.visible = true
+	_clear_pad()
 	menu_center.visible = false
 	over_center.visible = false
 	level_banner.visible = false
@@ -670,6 +798,7 @@ func game_over():
 	lbl_over.text = "游戏结束\n分数: %d\n最高分: %d" % [score, GameManager.best_score]
 	over_center.visible = true
 	hint_label.visible = false
+	_hide_pad()
 	if audio != null:
 		audio.play_death()
 	if player and is_instance_valid(player):
@@ -687,6 +816,7 @@ func game_win():
 	lbl_over.text = "通关啦！\n总分: %d\n最高分: %d" % [score, GameManager.best_score]
 	over_center.visible = true
 	hint_label.visible = false
+	_hide_pad()
 	if player and is_instance_valid(player):
 		player.queue_free()
 		player = null
@@ -734,8 +864,14 @@ func _process(_delta: float):
 func _input(event):
 	if state != "playing" or player == null:
 		return
-	if event is InputEventScreenTouch or event is InputEventMouseButton:
-		if event.pressed:
-			player.target = event.position
-	elif event is InputEventScreenDrag or event is InputEventMouseMotion:
-		player.target = event.position
+	if event is InputEventMouseButton:
+		var mb: InputEventMouseButton = event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_LEFT:
+			if mb.pressed:
+				# 左下角方向键由按钮自身消化，落在它上面不触发开火
+				if not _point_over_pad(mb.position):
+					player.firing = true
+			else:
+				player.firing = false
+	elif event is InputEventScreenTouch or event is InputEventScreenDrag:
+		_handle_touch_aim(event)
