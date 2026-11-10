@@ -6,8 +6,9 @@
 [build]
   publish = "src/release/web"
   # 每次部署跑一次准备脚本：用当前 wasm 重新生成 index.wasm.gz，
-  # 并把 index.html 的 fileSizes.index.wasm 改成实际传输的压缩字节数。
-  # 这样 Godot 重新导出后无需任何手工同步，进度条也不会卡在 ~25%。
+  # 保证 Godot 重新导出后预压缩体自动同步（无需手工操作）。
+  # 注意：脚本不会也不应改 index.html 的 fileSizes —— Godot 原值本就正确，
+  # 改成压缩大小会让加载进度条一打开就爆满。详见脚本文件头注释。
   command = "bash scripts/prepare-web.sh"
 
 # ---------------------------------------------------------------------------

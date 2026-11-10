@@ -138,24 +138,39 @@
 **诊断**：压缩链路没坏（wasm 实收 9.6 MB）。瓶颈是
 ① 国内直连 TTFB ~0.85s / 吞吐 ~1.1MB/s，16 MB 首包纯下载约 15 秒
 ② 手机 CPU 现场编译 38 MB wasm，再 10–20 秒
-③ `fileSizes.index.wasm` 仍按 39.5 MB 算，进度条卡在约 25% 再跳，观感像卡死。
 另外 `index.pck` 实测 gzip 只能压到 6.36 MB（省 0.8%），预压缩无意义。
+（曾误判 `fileSizes` 会让进度条卡在 25%，见下方「误判与撤销」。）
 
 **落地**：
 
 | 文件 | 改动 |
 |---|---|
-| `scripts/prepare-web.sh` | **新增** 构建脚本：用当前 wasm 重新生成 gz（`-9 -n` 确定性输出），并把 `index.html` 的 `fileSizes.index.wasm` 改成 gz 实际字节数 |
+| `scripts/prepare-web.sh` | **新增** 构建脚本：用当前 wasm 重新生成 gz（`-9 -n` 确定性输出）；**不改** `index.html` |
 | `netlify.toml` | `command` 从裸 gzip 改为 `bash scripts/prepare-web.sh` |
 | `src/release/web/index.wasm.gz` | 本地重新生成，与 11-10 导出的 wasm 同步 |
 
-**要点**：数值自适应，wasm 变小后不用改脚本；只改 publish 目录的构建产物，
-仓库里的 `index.html` 保持 Godot 原样，避免每次重导产生 diff。本地已验证
-`fileSizes` 从 `39514754` → `10084297`，`index.pck` 保持 `6407312` 不变；
-`-n` 让两次生成的 sha256 完全一致。
+**要点**：只做「预压缩体同步」一件事，数值自适应，wasm 变小也不用改脚本；
+只改 publish 目录的构建产物，仓库里的 `index.html` 保持 Godot 原样。
 
 **仍需用户侧**：重新导出时确认用 **Release 模板、不勾 "Export With Debug"**，
 可再省约 10–15% 引擎体积（脚本会自动适配新的 gz 大小）。
 
-**质量门：CONCERNS** — 首包体积与进度条已优化，但跨境链路与手机 WASM 编译
-仍未解决（属方案 B / C 范畴，用户暂未选）。
+### ⚠️ 一次误判与撤销（15:24）
+
+第一版脚本里加了 sed，把 `fileSizes.index.wasm` 改成 gz 大小 `10084286`。
+线上确实生效（HTML 与 gz 的 `Content-Length` 都是 10084286、本地与线上
+sha256 一致），但**用户实测进度条一打开就爆满并停住**——这是回归。
+
+根因（读 `index.js` 确认）：`loadFetch` 用 `response.body.getReader()` 累加
+`result.value.length` 作为 `loaded`；浏览器会自动解压 `Content-Encoding: gzip`，
+所以 `loaded` 是**解压后字节数**，天然等于未压缩 wasm 大小 `39514754`。
+Godot 导出的 `fileSizes` 本来就正确。改成 gz 大小后 `loaded` 迅速超过 `total`，
+进度条瞬间到 100%，之后只剩 WASM 编译的静默期，看起来像卡死。
+
+**已撤销 sed**，脚本只重新生成 gz；仓库里 `index.html` 一直是
+`fileSizes.index.wasm = 39514754`，重新部署后线上会恢复正确值。
+脚本文件头已写死这条禁令，避免再犯。
+
+**质量门：CONCERNS** — 预压缩同步已就绪，进度条需重新部署后复验。
+整体仍开着，剩余：① 跨境链路与手机 WASM 编译（方案 B / C，用户暂未选）
+② 双浮动摇杆双端真人实测 ③ 撤销后重新部署、确认线上 `fileSizes` 恢复 39514754。
