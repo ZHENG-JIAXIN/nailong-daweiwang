@@ -1,6 +1,6 @@
 extends Area2D
 class_name Player
-# Player —— 按键移动(WASD/方向键/屏幕方向键) + 鼠标或触摸瞄准、吞噬成长、生命值、武器系统、角色增益
+# Player —— 按键/左摇杆移动 + 鼠标或右摇杆瞄准（全向 360°）、吞噬成长、生命值、武器系统、角色增益
 # 起草：engineering-lead 方法论（主理人代笔）。路径 res://player.gd
 
 const BulletScript := preload("res://bullet.gd")
@@ -27,8 +27,8 @@ var melee_cd: float = 0.0
 var pad_dir: Vector2 = Vector2.ZERO
 var firing: bool = false
 var touch_firing: bool = false
-var touch_aim: bool = false
-var touch_aim_pos: Vector2 = Vector2.ZERO
+var touch_aim_active: bool = false
+var touch_aim_dir: Vector2 = Vector2(1.0, 0.0)
 var aim_dir: Vector2 = Vector2(1.0, 0.0)
 var _iframes: float = 0.0
 var _swing_timer: float = 0.0
@@ -302,13 +302,14 @@ func _fire_loop():
 func _process(delta: float):
 	if dead:
 		return
-	# 瞄准：移动端触摸优先，PC 用鼠标；触摸源出现后不再被鼠标覆盖
-	var aim_point: Vector2 = get_global_mouse_position()
-	if touch_aim:
-		aim_point = touch_aim_pos
-	var to_m: Vector2 = aim_point - global_position
-	if to_m.length() > 1.0:
-		aim_dir = to_m.normalized()
+	# 瞄准：移动端用右摇杆的方向向量（与角色位置无关，真 360°）；PC 用鼠标
+	if touch_aim_active:
+		aim_dir = touch_aim_dir
+	else:
+		var gm: Vector2 = get_global_mouse_position()
+		var to_m: Vector2 = gm - global_position
+		if to_m.length() > 1.0:
+			aim_dir = to_m.normalized()
 	# 计时器
 	if _iframes > 0.0:
 		_iframes -= delta

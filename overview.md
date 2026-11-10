@@ -94,13 +94,38 @@
 
 **关键设计**：屏幕按钮用普通 `Button`（PC 鼠标可按、移动端触摸可按），走 `button_down`/`button_up`；左 45% 屏宽留给方向键并用 `_point_over_pad()` 过滤，避免按方向键误触开火；松开事件无条件复位，避免「键内按下、键外松开」卡住持续开火。
 
-**质量门：CONCERNS** — 本机无 Godot CLI，无法无头语法检查。阻塞项：
-① 本机 Godot 打开确认无 parse error
-② 按 UX 规格 §7 做 PC / 移动端验收
-③ 重新导出 Web 并提交 `index.pck` + `index.html`
+**质量门：CONCERNS（仅剩双端实测）** — 代码已上线。
+已完成：Godot 重新导出成功（脚本编译通过）、提交 `3f8b4d2`、push、Netlify 自动部署；
+线上 `index.pck` 与 `index.html` 的 `fileSizes` 均为 `6407376`，版本一致。
+剩余阻塞项：按 UX 规格 §7 做 PC / 移动端实测（尤其移动端左下角按键、右半屏瞄准开火）。
 
 **已知风险与缓解**：
 - `export_presets.cfg` 的 `html/experimental_virtual_keyboard=true` 已开启，重新导出会**自动**带上 `experimentalVK:true`，无需手动改
 - 导出后本地 `index.wasm.gz` 会过时，但 Netlify build command 每次部署自动重生成，线上不受影响
 - 移动端暂不提供切武器/换弹屏幕键（远程空仓自动换弹、近战无弹药）
-- **待补**：Godot 的「触摸转鼠标」只跟随第一根手指。若玩家先按住右侧开火、再用左手按方向键，第二指不生成鼠标事件，方向键可能无响应。缓解方案是在 `main.gd` 里按 `InputEventScreenTouch.index` 直接映射左侧方向，不依赖 Button 的鼠标模拟
+- **已在 v2.0 解决**：v1.0 的「触摸转鼠标只跟随第一指」隐患，通过 `InputEventScreenTouch.index` 双指追踪消除（见下节）
+
+---
+
+## 追加：双浮动摇杆 v2.0（手感打磨 · 2026-11-10）
+
+用户实测反馈：v1.0 按键太小、固定太死、射击角度不足 360°。根因是「固定 D-pad +
+绝对触摸点瞄准」——`aim_dir = 触摸点 − 角色位置`，而触摸点被限制在右半屏，
+手指永远到不了角色左侧，朝左几乎不可达；角色跑到屏幕右侧时角度还会乱跳。
+
+**改法**：方向改为「手指相对按下点的偏移向量」，与角色坐标、落点位置都无关。
+
+| 文件 | 改动 |
+|---|---|
+| `src/joystick_overlay.gd` | **新增** 代码绘制双摇杆（底盘 R=104、摇杆头 R=44，青蓝 / 橙半透明，按下淡入） |
+| `src/main.gd` | 删固定 D-pad 全套；用 `InputEventScreenTouch.index` 追踪左右两指，按下点即摇杆原点；`_sync_joysticks()` 输出移动向量与瞄准向量；`touch_seen` 屏蔽触摸模拟的鼠标事件 |
+| `src/player.gd` | 瞄准从绝对点改为 `touch_aim_dir` 方向向量 → 真 360° |
+| `design/gdd/input-ux-spec.md` | 重写为 v2.0 摇杆规格 |
+
+**要点**：轻推慢走 / 推到底全速（全向连续，不再是 8 向）；右摇杆按住即开火、松开保留朝向；
+双指先后顺序任意；PC 保持 `WASD + 鼠标`，摇杆仅在有触摸时出现。
+
+**质量门：CONCERNS** — 本机无 Godot CLI，未做无头语法检查。阻塞项：
+① 本机 Godot 打开确认无 parse error（新增 `class_name JoystickOverlay` 需项目扫描）
+② 按规格 §7 做双端实测（重点：360° 绕圈、双指任意顺序、摇杆尺寸手感）
+③ 重新导出 Web + `git push`

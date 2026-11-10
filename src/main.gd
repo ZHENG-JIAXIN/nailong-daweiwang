@@ -77,13 +77,19 @@ var level_banner: CenterContainer
 var lbl_level_banner: Label
 var level_banner_timer: Timer
 
-# 双端输入：左下角可按住的 W/A/S/D 屏幕方向键
-var pad: Control
-var pad_buttons: Dictionary = {}
-var pad_w: bool = false
-var pad_a: bool = false
-var pad_s: bool = false
-var pad_d: bool = false
+# 双浮动摇杆：左右半屏各按 InputEventScreenTouch.index 追踪一根手指
+# BASE_R 需与 joystick_overlay.gd 的 BASE_R 保持一致
+const JOY_BASE_R: float = 104.0
+const JOY_DEADZONE: float = 8.0
+
+var joy: JoystickOverlay
+var touch_seen: bool = false
+var left_idx: int = -1
+var left_origin: Vector2 = Vector2.ZERO
+var left_current: Vector2 = Vector2.ZERO
+var right_idx: int = -1
+var right_origin: Vector2 = Vector2.ZERO
+var right_current: Vector2 = Vector2.ZERO
 
 func _ready():
 	# 强制全局字体：直接 preload 静态 TTF(simhei，已烘焙 556 中文字形)并代码建主题。
@@ -306,7 +312,7 @@ func build_ui():
 	boss_bar.add_child(boss_bar_label)
 
 	# 游戏内提示 & 调试标签
-	hint_label = mk_label("WASD/方向键或左下按键移动 · 鼠标瞄准 · 左键开火 · 1-4 切武器 · R 换弹｜手机：右侧触摸瞄准并开火", 18, Color(0.1, 0.2, 0.35))
+	hint_label = mk_label("WASD/方向键移动 · 鼠标瞄准 · 左键开火 · 1-4 切武器 · R 换弹｜手机：左右半屏按住出摇杆，左移动 / 右瞄准开火", 18, Color(0.1, 0.2, 0.35))
 	hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	hint_label.offset_top = -56
@@ -362,123 +368,117 @@ func build_ui():
 	spawn_timer.wait_time = 0.55
 	spawn_timer.timeout.connect(spawn_fish)
 	add_child(spawn_timer)
-	build_move_pad()
+	build_joysticks()
 
-# 双端输入：左下角「可按住」的 W/A/S/D 屏幕方向键。
-# PC 用鼠标按住、移动端用触摸按住，两者都走 button_down / button_up。
-func build_move_pad():
-	pad = Control.new()
-	pad.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	pad.anchor_left = 0.0
-	pad.anchor_top = 1.0
-	pad.anchor_right = 0.0
-	pad.anchor_bottom = 1.0
-	pad.offset_left = 20.0
-	pad.offset_top = -200.0
-	pad.offset_right = 260.0
-	pad.offset_bottom = -20.0
-	pad.visible = false
-	ui.add_child(pad)
-	var keys: Array[String] = ["W", "A", "S", "D"]
-	var px: Array[float] = [82.0, 0.0, 82.0, 164.0]
-	var py: Array[float] = [0.0, 92.0, 92.0, 92.0]
-	for i in range(4):
-		var k: String = keys[i]
-		var b: Button = Button.new()
-		b.text = k
-		b.size = Vector2(76.0, 76.0)
-		b.custom_minimum_size = Vector2(76.0, 76.0)
-		b.position = Vector2(px[i], py[i])
-		b.mouse_filter = Control.MOUSE_FILTER_STOP
-		b.add_theme_font_size_override("font_size", 30)
-		b.button_down.connect(_on_pad_down.bind(k))
-		b.button_up.connect(_on_pad_up.bind(k))
-		pad.add_child(b)
-		pad_buttons[k] = b
+# 双浮动摇杆：左右半屏各追踪一根手指，按下点即摇杆原点（跟随手指，不固定位置）。
+# 方向来自「手指相对按下点的偏移向量」，与角色位置无关 → 瞄准真 360°。
+func build_joysticks():
+	joy = JoystickOverlay.new()
+	# 显式锚点覆盖整个 ui，避免 preset 在未入树(size=0)时算出错误 offsets
+	joy.anchor_left = 0.0
+	joy.anchor_top = 0.0
+	joy.anchor_right = 1.0
+	joy.anchor_bottom = 1.0
+	joy.offset_left = 0.0
+	joy.offset_top = 0.0
+	joy.offset_right = 0.0
+	joy.offset_bottom = 0.0
+	joy.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	joy.visible = false
+	ui.add_child(joy)
 
-func _on_pad_down(k: String):
-	match k:
-		"W": pad_w = true
-		"A": pad_a = true
-		"S": pad_s = true
-		"D": pad_d = true
-	_set_pad_visual(k, true)
-	_sync_pad_dir()
+func _reset_joysticks(show_overlay: bool):
+	left_idx = -1
+	left_origin = Vector2.ZERO
+	left_current = Vector2.ZERO
+	right_idx = -1
+	right_origin = Vector2.ZERO
+	right_current = Vector2.ZERO
+	if joy != null:
+		joy.visible = show_overlay
+	_sync_joysticks()
 
-func _on_pad_up(k: String):
-	match k:
-		"W": pad_w = false
-		"A": pad_a = false
-		"S": pad_s = false
-		"D": pad_d = false
-	_set_pad_visual(k, false)
-	_sync_pad_dir()
+func _joy_offset(origin: Vector2, current: Vector2) -> Vector2:
+	var d: Vector2 = current - origin
+	if d.length() > JOY_BASE_R:
+		d = d.normalized() * JOY_BASE_R
+	return d
 
-func _set_pad_visual(k: String, on: bool):
-	if not pad_buttons.has(k):
-		return
-	var b: Button = pad_buttons[k]
-	if b != null:
-		if on:
-			b.modulate = Color(1.0, 0.78, 0.28)
-		else:
-			b.modulate = Color.WHITE
-
-func _sync_pad_dir():
-	var d: Vector2 = Vector2.ZERO
-	if pad_w:
-		d.y -= 1.0
-	if pad_s:
-		d.y += 1.0
-	if pad_a:
-		d.x -= 1.0
-	if pad_d:
-		d.x += 1.0
+func _sync_joysticks():
+	var ld: Vector2 = _joy_offset(left_origin, left_current)
+	var rd: Vector2 = _joy_offset(right_origin, right_current)
 	if player != null and is_instance_valid(player):
-		player.pad_dir = d
+		# 左摇杆：偏移比例驱动移动，轻推慢走、推到底全速（全向）
+		if ld.length() < JOY_DEADZONE:
+			player.pad_dir = Vector2.ZERO
+		else:
+			player.pad_dir = ld / JOY_BASE_R
+		# 右摇杆：偏移方向即瞄准方向，与角色坐标无关 → 真 360°
+		if right_idx != -1:
+			player.touch_aim_active = true
+			if rd.length() >= JOY_DEADZONE:
+				player.touch_aim_dir = (rd / JOY_BASE_R).normalized()
+		player.touch_firing = (right_idx != -1)
+		# 触摸模式下由 touch_firing 独占，清掉鼠标模拟事件的残留开火
+		player.firing = false
+	if joy != null:
+		joy.set_state(
+			left_idx != -1, left_origin, left_origin + ld,
+			right_idx != -1, right_origin, right_origin + rd
+		)
 
-func _clear_pad():
-	pad_w = false
-	pad_a = false
-	pad_s = false
-	pad_d = false
-	for k in pad_buttons:
-		_set_pad_visual(str(k), false)
-	_sync_pad_dir()
-
-func _hide_pad():
-	if pad == null:
-		return
-	pad.visible = false
-	_clear_pad()
-
-func _point_over_pad(p: Vector2) -> bool:
-	if pad == null or not pad.visible:
-		return false
-	return pad.get_global_rect().has_point(p)
-
-func _handle_touch_aim(event: InputEvent):
+func _handle_touch(event: InputEvent):
+	touch_seen = true
+	var idx: int = -1
 	var p: Vector2 = Vector2.ZERO
 	var pressed: bool = true
 	if event is InputEventScreenTouch:
 		var st: InputEventScreenTouch = event as InputEventScreenTouch
+		idx = st.index
 		p = st.position
 		pressed = st.pressed
 	elif event is InputEventScreenDrag:
 		var sd: InputEventScreenDrag = event as InputEventScreenDrag
+		idx = sd.index
 		p = sd.position
 	else:
 		return
-	# 松手一律停火，避免落在左侧区域时漏掉复位
 	if not pressed:
-		player.touch_firing = false
+		_release_touch(idx)
 		return
-	# 左侧 45% 留给方向键，右侧才用于瞄准 + 开火
-	if p.x < get_viewport_rect().size.x * 0.45:
+	# 已归属的手指只更新位置
+	if idx == left_idx:
+		left_current = p
+		_sync_joysticks()
 		return
-	player.touch_aim = true
-	player.touch_aim_pos = p
-	player.touch_firing = true
+	if idx == right_idx:
+		right_current = p
+		_sync_joysticks()
+		return
+	# 新手指按落点分左右，每侧只认第一根；双指先后顺序任意
+	var half: float = get_viewport_rect().size.x * 0.5
+	if p.x < half and left_idx == -1:
+		left_idx = idx
+		left_origin = p
+		left_current = p
+	elif p.x >= half and right_idx == -1:
+		right_idx = idx
+		right_origin = p
+		right_current = p
+	else:
+		return
+	_sync_joysticks()
+
+func _release_touch(idx: int):
+	if idx == left_idx:
+		left_idx = -1
+		left_origin = Vector2.ZERO
+		left_current = Vector2.ZERO
+	if idx == right_idx:
+		right_idx = -1
+		right_origin = Vector2.ZERO
+		right_current = Vector2.ZERO
+	_sync_joysticks()
 
 func mk_label(text: String, size: int, color: Color) -> Label:
 	var l := Label.new()
@@ -541,7 +541,7 @@ func show_menu():
 	state = "menu"
 	hud.visible = false
 	hint_label.visible = false
-	_hide_pad()
+	_reset_joysticks(false)
 	level_banner.visible = false
 	login_center.visible = false
 	menu_center.visible = true
@@ -551,7 +551,7 @@ func show_menu():
 func show_login():
 	state = "login"
 	hud.visible = false
-	_hide_pad()
+	_reset_joysticks(false)
 	menu_center.visible = false
 	over_center.visible = false
 	login_center.visible = true
@@ -628,8 +628,7 @@ func start_game():
 	state = "playing"
 	hud.visible = true
 	hint_label.visible = true
-	pad.visible = true
-	_clear_pad()
+	_reset_joysticks(true)
 	menu_center.visible = false
 	over_center.visible = false
 	level_banner.visible = false
@@ -798,7 +797,7 @@ func game_over():
 	lbl_over.text = "游戏结束\n分数: %d\n最高分: %d" % [score, GameManager.best_score]
 	over_center.visible = true
 	hint_label.visible = false
-	_hide_pad()
+	_reset_joysticks(false)
 	if audio != null:
 		audio.play_death()
 	if player and is_instance_valid(player):
@@ -816,7 +815,7 @@ func game_win():
 	lbl_over.text = "通关啦！\n总分: %d\n最高分: %d" % [score, GameManager.best_score]
 	over_center.visible = true
 	hint_label.visible = false
-	_hide_pad()
+	_reset_joysticks(false)
 	if player and is_instance_valid(player):
 		player.queue_free()
 		player = null
@@ -865,13 +864,11 @@ func _input(event):
 	if state != "playing" or player == null:
 		return
 	if event is InputEventMouseButton:
+		# 触摸设备会把触摸模拟成鼠标；一旦见过触摸就完全交给摇杆逻辑
+		if touch_seen:
+			return
 		var mb: InputEventMouseButton = event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT:
-			if mb.pressed:
-				# 左下角方向键由按钮自身消化，落在它上面不触发开火
-				if not _point_over_pad(mb.position):
-					player.firing = true
-			else:
-				player.firing = false
+			player.firing = mb.pressed
 	elif event is InputEventScreenTouch or event is InputEventScreenDrag:
-		_handle_touch_aim(event)
+		_handle_touch(event)
