@@ -125,7 +125,37 @@
 **要点**：轻推慢走 / 推到底全速（全向连续，不再是 8 向）；右摇杆按住即开火、松开保留朝向；
 双指先后顺序任意；PC 保持 `WASD + 鼠标`，摇杆仅在有触摸时出现。
 
-**质量门：CONCERNS** — 本机无 Godot CLI，未做无头语法检查。阻塞项：
-① 本机 Godot 打开确认无 parse error（新增 `class_name JoystickOverlay` 需项目扫描）
-② 按规格 §7 做双端实测（重点：360° 绕圈、双指任意顺序、摇杆尺寸手感）
-③ 重新导出 Web + `git push`
+**质量门：CONCERNS（仅剩双端实测）** — 代码已上线。
+已完成：Godot 打开并重新导出成功（新 `class_name JoystickOverlay` 已注册、脚本编译通过）、
+提交 `978c057`、push、Netlify 自动部署；线上 `index.pck` 与 `index.html` 的
+`fileSizes` 均为 `6407312`，版本一致。
+剩余阻塞项：按规格 §7 做双端实测（重点：360° 绕圈、双指任意顺序、摇杆尺寸手感）。
+
+---
+
+## 追加：加载性能优化 A（构建脚本化 · 2026-11-10）
+
+**诊断**：压缩链路没坏（wasm 实收 9.6 MB）。瓶颈是
+① 国内直连 TTFB ~0.85s / 吞吐 ~1.1MB/s，16 MB 首包纯下载约 15 秒
+② 手机 CPU 现场编译 38 MB wasm，再 10–20 秒
+③ `fileSizes.index.wasm` 仍按 39.5 MB 算，进度条卡在约 25% 再跳，观感像卡死。
+另外 `index.pck` 实测 gzip 只能压到 6.36 MB（省 0.8%），预压缩无意义。
+
+**落地**：
+
+| 文件 | 改动 |
+|---|---|
+| `scripts/prepare-web.sh` | **新增** 构建脚本：用当前 wasm 重新生成 gz（`-9 -n` 确定性输出），并把 `index.html` 的 `fileSizes.index.wasm` 改成 gz 实际字节数 |
+| `netlify.toml` | `command` 从裸 gzip 改为 `bash scripts/prepare-web.sh` |
+| `src/release/web/index.wasm.gz` | 本地重新生成，与 11-10 导出的 wasm 同步 |
+
+**要点**：数值自适应，wasm 变小后不用改脚本；只改 publish 目录的构建产物，
+仓库里的 `index.html` 保持 Godot 原样，避免每次重导产生 diff。本地已验证
+`fileSizes` 从 `39514754` → `10084297`，`index.pck` 保持 `6407312` 不变；
+`-n` 让两次生成的 sha256 完全一致。
+
+**仍需用户侧**：重新导出时确认用 **Release 模板、不勾 "Export With Debug"**，
+可再省约 10–15% 引擎体积（脚本会自动适配新的 gz 大小）。
+
+**质量门：CONCERNS** — 首包体积与进度条已优化，但跨境链路与手机 WASM 编译
+仍未解决（属方案 B / C 范畴，用户暂未选）。
