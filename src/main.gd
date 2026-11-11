@@ -68,6 +68,8 @@ var lbl_title: Label
 var btn_start: Button
 var lbl_over: Label
 var btn_again: Button
+var btn_back_menu: Button
+var btn_logout_over: Button
 var btn_quiz: Button
 var quiz_panel: CenterContainer
 var quiz_q: Label
@@ -248,6 +250,12 @@ func build_ui():
 	btn_again = mk_button("再来一局")
 	ov.add_child(btn_again)
 	btn_again.pressed.connect(_on_again_pressed)
+	btn_back_menu = mk_button("返回菜单")
+	btn_back_menu.pressed.connect(_on_back_menu_pressed)
+	ov.add_child(btn_back_menu)
+	btn_logout_over = mk_button("退出登录")
+	btn_logout_over.pressed.connect(_on_logout_from_over_pressed)
+	ov.add_child(btn_logout_over)
 
 	# 答题赚币面板
 	quiz_panel = CenterContainer.new()
@@ -674,6 +682,26 @@ func _on_again_pressed():
 	GameManager.pay_entry(fee)
 	start_game()
 
+# 清掉所有敌对实体（鱼 / BOSS / 敌方子弹都在 fish_layer）与玩家子弹，
+# 让结算画面真正停下来，不再出现「结算了但还在游」的错觉。
+func _clear_battlefield():
+	for f in fish_layer.get_children():
+		f.queue_free()
+	for b in get_tree().get_nodes_in_group("bullet"):
+		b.queue_free()
+	current_boss = null
+	if boss_bar:
+		boss_bar.visible = false
+
+func _on_back_menu_pressed():
+	_clear_battlefield()
+	show_menu()
+
+func _on_logout_from_over_pressed():
+	_clear_battlefield()
+	GameManager.logout()
+	show_login()
+
 func start_game():
 	for f in fish_layer.get_children():
 		f.queue_free()
@@ -893,6 +921,9 @@ func _on_fish_died(fish: Fish):
 		score += 400
 		level_score += 400
 		GameManager.add_coins(30)
+		# BOSS 倒下后清掉它的残留弹幕
+		for b in get_tree().get_nodes_in_group("boss_bullet"):
+			b.queue_free()
 		current_boss = null
 		if boss_bar:
 			boss_bar.visible = false
@@ -959,9 +990,7 @@ func game_over():
 		return
 	state = "gameover"
 	spawn_timer.stop()
-	if boss_bar:
-		boss_bar.visible = false
-	current_boss = null
+	_clear_battlefield()
 	GameManager.record_score(score)
 	lbl_over.text = "游戏结束\n到达第 %d 关\n总分: %d\n最高分: %d" % [level_index, score, GameManager.best_score]
 	over_center.visible = true

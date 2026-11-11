@@ -246,9 +246,53 @@ Godot 导出的 `fileSizes` 本来就正确。改成 gz 大小后 `loaded` 迅�
 **浏览器硬限制**：无用户手势时音频一律静音，「零交互自动响」在 Web 上做不到；
 现在能做到的是「第一次点击 / 按键的瞬间立刻出声」。
 
-**质量门：CONCERNS** — 需重新导出 Web + push 后双端实测：
+**线上验证（16:29，PASS）** — 提交 `69efeba` 已推送并部署：
+- 线上 `index.pck` `8920004`、`index.html` 的 `fileSizes` 同为 `8920004`，版本一致
+- `fileSizes.index.wasm = 39514754` 保持 Godot 原值、`experimentalVK: true`
+- `/index.wasm` 仍返回 `Content-Encoding: gzip` / `10084286` / `application/wasm`
+- 用户已在 Godot 里重新导出，且自动生成的 `bgm.ogg.import` 已一并提交 ✓
+
+**发现 1 · pck 涨了 2.5 MB**：`6412080 → 8920004`。音源本身与旧版持平（2.3 MB），
+但因**旧 `bgm.wav` 未被删除**，pck 里同时存在两份音乐。删除 `bgm.wav` +
+`bgm.wav.import` 后重新导出，可省约 2 MB（待用户确认，未擅自删）。
+此前「首包不膨胀」的说法应修正为「音源体积持平，但 pck 因双份音乐 +2.5 MB」。
+
+**发现 2 · 循环与缓存**：Godot 生成的 `bgm.ogg.import` 默认 `loop=false`，
+已改为 `loop=true`（与运行时 `ogg.loop = true` 双保险，下次重导生效）。
+另外 `py_compile` 产生的 `scripts/__pycache__/*.pyc` 被误提交，
+已在 `.gitignore` 加 `__pycache__/` / `*.pyc`；已入库的那份可在下次提交时移除。
+
+**质量门：CONCERNS** — 代码与部署侧完成，剩余双端实测：
 ① 首次点击出声、进游戏不重启、切后台回来恢复
-② 新 Ogg 音源能正常播放并循环、音量与旧版相当
-③ 帧率无变化、`index.pck` 未明显膨胀。
-注意：Godot 首次打开会为 `bgm.ogg` 自动生成 `.import` 文件，需一并提交；
-若导入参数里循环默认关闭，运行时 `ogg.loop = true` 会覆盖。
+② 新 BGM 能播放且播完循环、音量与旧版相当
+③ 帧率无变化 ④ 是否接受上面 2.5 MB 的 pck 增量。
+
+---
+
+## 追加：BOSS 技能 + 失败返回 + 旧音源清理（2026-11-11 · 方案 A）
+
+**问题**：BOSS 只有体型/血量/接触伤害更大，没有任何主动攻击；
+死亡结算面板只有「再来一局」，无法返回菜单；且死亡时没清场，鱼还在游。
+
+| 文件 | 改动 |
+|---|---|
+| `design/gdd/boss-skills-spec.md` | **新增** 三专属弹幕、HP 阶段、蓄力预警、性能约束与验收标准 |
+| `src/boss_bullet.gd` | **新增** 敌方子弹：环形 / 扇形 / 慢速追踪，红紫芯 + 自适应描边，命中 `player` 扣血 |
+| `src/fish.gd` | BOSS 技能计时、三阶段强化（间隔 2.4/1.8/1.3s、弹数 +2/+4）、0.6s 蓄力红环 + `modulate` 闪烁、单屏 40 发上限 |
+| `src/main.gd` | 结算面板加「返回菜单」「退出登录」；新增 `_clear_battlefield()`；死亡 / BOSS 死亡 / 返回时清场清弹 |
+| `src/assets/audio/bgm.wav` + `.import` | **删除**（旧音源，代码零引用），重导后 pck 预计省约 2 MB |
+
+**关键设计**：巨鲨环形 / 章鱼扇形 / 鲸王追踪，三者手感各异；
+蓄力预警让弹幕可预判可躲；敌方子弹挂 `fish_layer` 且加入 `boss_bullet` 组，
+所有清场循环天然覆盖；蓄力闪烁只用 `modulate`、子弹 `_draw()` 只画一次，
+不引入每帧重绘（避免重演 Web 单线程卡顿）。
+
+**质量门：CONCERNS** — 本机无 Godot CLI，未做无头语法检查。阻塞项：
+① Godot 打开确认无 parse error（新增 `class_name BossBullet` 需扫描）
+② 按规格 §9 双端实测（三种弹幕、蓄力预警、阶段强化、命中不瞬秒、
+弹幕密集帧率、清场无残留、结算可返回）
+③ 重新导出 Web + push（本次含删资源，pck 应回到约 6.9 MB）
+
+**已知风险**：`boss_bullet.gd` 引用 `Player` 全局类、`fish.gd` preload
+`boss_bullet.gd`，Godot 首次打开会重建全局类表，需等扫描完成再导出；
+弹幕数值为初版，待 Playtest 按「能不能躲」微调。

@@ -5,6 +5,7 @@ class_name Fish
 # 起草：engineering-lead 方法论（主理人代笔，实际由主理人执行）。路径 res://fish.gd
 
 const CJK_FONT := preload("res://assets/fonts/simhei.ttf")
+const BossBulletScript := preload("res://boss_bullet.gd")
 
 # BOSS 类型表（外观 / 数值明显区别于普通鱼）
 const BOSS_TYPES: Array[Dictionary] = [
@@ -32,6 +33,12 @@ var contact_damage: float = 10.0   # 接触玩家时对玩家造成的伤害
 var is_boss: bool = false
 var boss_name: String = ""
 
+# BOSS 技能状态
+var boss_type: int = -1
+var skill_timer: float = 2.0
+var charge_timer: float = 0.0
+var charging: bool = false
+
 func _ready():
 	add_to_group("fish")
 	add_to_group("damageable")
@@ -57,6 +64,8 @@ func setup(r: float, vel: Vector2, col: Color):
 	queue_redraw()
 
 func _process(delta: float):
+	if is_boss and hp > 0.0:
+		_update_boss_skill(delta)
 	if is_predator and player_ref != null and is_instance_valid(player_ref):
 		var d: Vector2 = player_ref.global_position - global_position
 		if d.length() < chase_range:
@@ -106,6 +115,8 @@ func _draw():
 	draw_circle(eye, max(1.0, radius * 0.1), Color.BLACK)
 
 	if is_boss:
+		if charging:
+			draw_arc(Vector2.ZERO, radius * 1.3, 0.0, TAU, 48, Color(1.0, 0.25, 0.25, 0.9), 5.0)
 		var bar_w: float = radius * 2.2
 		var bar_h: float = 12.0
 		var bx: float = -bar_w * 0.5
@@ -127,8 +138,12 @@ func take_damage(dmg: float) -> bool:
 	return false
 
 func make_boss(type_index: int):
-	var t: Dictionary = BOSS_TYPES[type_index % BOSS_TYPES.size()]
+	boss_type = type_index % BOSS_TYPES.size()
+	var t: Dictionary = BOSS_TYPES[boss_type]
 	is_boss = true
+	skill_timer = 2.0
+	charge_timer = 0.0
+	charging = false
 	boss_name = t["name"]
 	color = t["color"]
 	max_hp = float(t["hp"])
@@ -144,3 +159,95 @@ func make_boss(type_index: int):
 	if cs != null:
 		cs.shape.radius = radius
 	queue_redraw()
+
+# ---------------- BOSS 技能（见 design/gdd/boss-skills-spec.md） ----------------
+
+func _skill_phase() -> int:
+	var ratio: float = hp / max_hp
+	if ratio > 0.7:
+		return 1
+	if ratio > 0.3:
+		return 2
+	return 3
+
+func _skill_interval() -> float:
+	match _skill_phase():
+		1: return 2.4
+		2: return 1.8
+		_: return 1.3
+	return 2.0
+
+func _bullet_count() -> int:
+	var base: int = 8
+	match boss_type:
+		0: base = 8
+		1: base = 5
+		2: base = 3
+	return base + 2 * (_skill_phase() - 1)
+
+func _update_boss_skill(delta: float):
+	if charging:
+		charge_timer -= delta
+		# 蓄力闪烁只改 modulate，不触发重绘（单线程 Web 性能）
+		var pulse: float = absf(sin(charge_timer * 12.0))
+		modulate = Color(1.0, 1.0 - 0.35 * pulse, 1.0 - 0.35 * pulse)
+		if charge_timer <= 0.0:
+			charging = false
+			modulate = Color.WHITE
+			_fire_boss_skill()
+			queue_redraw()
+		return
+	skill_timer -= delta
+	if skill_timer <= 0.0:
+		charging = true
+		charge_timer = 0.6
+		skill_timer = _skill_interval()
+		queue_redraw()
+
+func _fire_boss_skill():
+	if player_ref == null or not is_instance_valid(player_ref):
+		return
+	# 单屏敌方子弹硬上限，避免弹幕拖垮单线程 Web
+	if get_tree().get_nodes_in_group("boss_bullet").size() >= 40:
+		return
+	match boss_type:
+		0: _fire_ring()
+		1: _fire_fan()
+		2: _fire_homing()
+
+func _spawn_boss_bullet(pos: Vector2, dir: Vector2, spd: float, dmg: float, p_life: float, p_homing: bool):
+	var b: BossBullet = BossBulletScript.new()
+	b.setup(pos, dir, spd, dmg, p_life, p_homing, player_ref)
+	var parent: Node = get_parent()
+	if parent != null:
+		parent.add_child(b)
+
+func _fire_ring():
+	var n: int = _bullet_count()
+	var spd: float = 170.0 + 20.0 * float(_skill_phase() - 1)
+	for i in range(n):
+		var ang: float = TAU * float(i) / float(n) + randf() * 0.12
+		var dir: Vector2 = Vector2(cos(ang), sin(ang))
+		_spawn_boss_bullet(global_position + dir * radius, dir, spd, 10.0, 5.0, false)
+
+func _fire_fan():
+	var n: int = _bullet_count()
+	var to_p: Vector2 = player_ref.global_position - global_position
+	var aim: float = to_p.angle()
+	var spd: float = 210.0 + 20.0 * float(_skill_phase() - 1)
+	for i in range(n):
+		var t: float = 0.0
+		if n > 1:
+			t = float(i) / float(n - 1) - 0.5
+		var ang: float = aim + t * 0.85
+		var dir: Vector2 = Vector2(cos(ang), sin(ang))
+		_spawn_boss_bullet(global_position + dir * radius, dir, spd, 10.0, 5.0, false)
+
+func _fire_homing():
+	var n: int = mini(_bullet_count(), 5)
+	var to_p: Vector2 = player_ref.global_position - global_position
+	var aim: float = to_p.angle()
+	for i in range(n):
+		var ang: float = aim + (float(i) - float(n - 1) * 0.5) * 0.35
+		var dir: Vector2 = Vector2(cos(ang), sin(ang))
+		_spawn_boss_bullet(global_position + dir * radius, dir, 140.0, 10.0, 6.0, true)

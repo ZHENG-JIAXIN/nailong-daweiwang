@@ -8,3 +8,7 @@ src/.godot/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Python 转码脚本缓存（py_compile / 运行脚本时生成，不入库）
+__pycache__/
+*.pyc
