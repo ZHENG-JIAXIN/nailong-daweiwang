@@ -397,6 +397,10 @@ func build_ui():
 	var lsub := mk_label("非商用 · 同人作品（IP 仅供学习交流）", 18, Color(1.0, 0.9, 0.6))
 	lsub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lv.add_child(lsub)
+	# 浏览器自动播放策略：无手势时音频静音，提示用户第一次交互即可出声
+	var laudio := mk_label("（点击或按键后音乐开始播放）", 16, Color(1.0, 0.9, 0.6))
+	laudio.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lv.add_child(laudio)
 	username_input = LineEdit.new()
 	username_input.placeholder_text = "输入用户名"
 	username_input.custom_minimum_size = Vector2(420.0, 64.0)

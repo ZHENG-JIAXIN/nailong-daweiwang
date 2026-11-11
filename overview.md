@@ -200,11 +200,55 @@ Godot 导出的 `fileSizes` 本来就正确。改成 gz 大小后 `loaded` 迅�
 过关需玩家点「继续」才推进，保留自主感；`state` 相关函数全部有 `playing` 保护，
 结算期间不生成鱼、不掉血、不开火。
 
-**质量门：CONCERNS** — 本机无 Godot CLI，未做无头语法检查。阻塞项：
-① Godot 打开确认无 parse error
-② 按两份规格做双端实测（重点：连续 10 关、每 3 关 BOSS、
-武器按钮不生成摇杆、深浅背景子弹对比）
-③ 重新导出 Web + push 上线
+**线上验证（15:46，PASS）** — 提交 `892fb54` 已推送并部署：
+- 线上 `index.pck` `6412080`、`index.html` 的 `fileSizes` 同为 `6412080`，版本一致
+- `fileSizes.index.wasm = 39514754` 保持 Godot 原值（构建脚本未改 HTML，回归未复发）
+- `experimentalVK: true`；`/index.wasm` 仍返回 `Content-Encoding: gzip` /
+  `Content-Length: 10084286` / `application/wasm`
+
+**质量门：CONCERNS（仅剩双端实测）** — 已完成：① Godot 打开并重新导出
+（脚本编译通过）② 重新导出 Web + push + Netlify 部署 + 线上验证。
+剩余阻塞项：按两份规格做双端真人实测（重点：连续 10 关、每 3 关 BOSS、
+武器按钮不生成摇杆、深浅背景子弹对比、结算面板按钮可点）。
 
 **已知风险**：武器栏 `y=214` 与顶部 HUD 末行接近，Godot 里若发现重叠需下调；
 `game_win()` 保留但不再接线；目标分数与难度公式为初版数值，待 Playtest 微调。
+
+---
+
+## 追加：BGM 启动链路优化（2026-11-11）
+
+用户要求「一进去就有音乐 + 画面音乐都流畅」，并提供了一个 38 MB 的 MP4 MV。
+初次评估提示了授权与体积风险；**用户随后确认其拥有该曲目的相应权利**，
+因此按授权素材接入。
+
+**音源处理**：本机原先无 ffmpeg / ffprobe，已通过 `imageio-ffmpeg`
+（自带二进制，无需系统安装）补齐转码能力，并新增可复用脚本
+`scripts/extract_bgm.py`：提取音轨 → Ogg Vorbis 96 kb/s / 48 kHz / stereo，
+输出 `src/assets/audio/bgm.ogg` **2.30 MB**（3 分 37 秒）。
+与旧 `bgm.wav`（2.3 MB）体积基本持平，**首包未膨胀**；
+38 MB 的 MP4 只作为转码输入，**未进入工作区、未打进 pck**。
+`bgm.wav` 保留作备份，程序已不再引用。
+
+**落地**：
+
+| 文件 | 改动 |
+|---|---|
+| `src/audio_player.gd` | 静音起步（`MUTE_DB=-80`）让解码与 AudioContext 尽早就绪；首个真实手势只解除静音、**不 stop/play 重启**（零空白、不从头）；已在播放时进游戏不打断；每次手势检查播放器是否被挂起（切后台回来）并恢复；`InputEventScreenDrag` 也算手势；`preload` 切到 `bgm.ogg`，并兼容 `AudioStreamOggVorbis.loop` |
+| `src/main.gd` | 登录页加一行「点击或按键后音乐开始播放」提示 |
+| `scripts/extract_bgm.py` | **新增** 可复用转码脚本：提取音轨 → Ogg 96 kb/s / 48 kHz / stereo |
+| `src/assets/audio/bgm.ogg` | **新增** 压缩后的 BGM 音源，2.30 MB / 3 分 37 秒 |
+| `src/assets/audio/README.txt` | 补自动播放策略说明、修正「自动查找」的过时描述、更新音源与授权占位 |
+
+**画面流畅**：现状 BGM 走 `preload` 文件播放、由音频后端解码，不占游戏主线程
+（`_process` 在文件模式下空转），本就是最优解，**未改动**，避免引入新卡顿。
+
+**浏览器硬限制**：无用户手势时音频一律静音，「零交互自动响」在 Web 上做不到；
+现在能做到的是「第一次点击 / 按键的瞬间立刻出声」。
+
+**质量门：CONCERNS** — 需重新导出 Web + push 后双端实测：
+① 首次点击出声、进游戏不重启、切后台回来恢复
+② 新 Ogg 音源能正常播放并循环、音量与旧版相当
+③ 帧率无变化、`index.pck` 未明显膨胀。
+注意：Godot 首次打开会为 `bgm.ogg` 自动生成 `.import` 文件，需一并提交；
+若导入参数里循环默认关闭，运行时 `ogg.loop = true` 会覆盖。

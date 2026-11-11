@@ -13,13 +13,16 @@ var gen_bgm: AudioStreamGenerator
 var bgm_phase: int = 0
 var bgm_on: bool = false
 var bgm_file_mode: bool = false  # true=BGM 走文件播放；false=回退程序化合成
-var _bgm_kicked: bool = false     # 是否已在用户手势后强制重启过 BGM（防重复重启）
+var _bgm_kicked: bool = false     # 是否已在首个用户手势后解除静音（防重复处理）
 
 const SR: int = 44100
 const MAX_BGM_FILL: int = 4096  # 单次补填上限，避免单帧 CPU 尖峰（约 93ms @44.1k）
+const BGM_VOLUME_DB: float = 0.0   # 正常音量（与原默认值一致，不改响度）
+const MUTE_DB: float = -80.0       # 用户手势前的静音起步音量
 # BGM 音源：用 preload 在导出时解析路径——Web 包里运行时 load() 常取不到资源，会静默回退到合成音；preload 最可靠。
-# 注意用 var 而非 const：GDScript 不允许修改常量资源的属性（如 loop_mode），var 可正常设置循环。
-var bgm_stream: AudioStream = preload("res://assets/audio/bgm.wav")
+# 注意用 var 而非 const：GDScript 不允许修改常量资源的属性（loop_mode / loop），var 可正常设置循环。
+# 换歌时改这一行路径即可（或用 scripts/extract_bgm.py 生成同名 bgm.ogg 覆盖）。
+var bgm_stream: AudioStream = preload("res://assets/audio/bgm.ogg")
 
 func _ready():
 	# SFX：程序化（吃鱼/死亡短音，开销极低，保留原逻辑）
@@ -37,9 +40,13 @@ func _ready():
 	if bgm_stream != null:
 		bgm_file_mode = true
 		bgm_player.stream = bgm_stream
+		# 兼容两种音源：WAV 用 loop_mode，Ogg Vorbis 用 loop
 		var wav := bgm_stream as AudioStreamWAV
 		if wav != null:
 			wav.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		var ogg := bgm_stream as AudioStreamOggVorbis
+		if ogg != null:
+			ogg.loop = true
 	else:
 		# 兜底：实时合成（缓冲加长，单线程下留足余量）
 		gen_bgm = AudioStreamGenerator.new()
@@ -107,19 +114,28 @@ func play_death():
 
 func start_bgm():
 	bgm_on = true
-	# 强制从头重启：确保在 AudioContext 已恢复（有用户手势）后真正出声。
-	# 浏览器策略下，早先在挂起上下文里的 play() 会静音但把 playing 置真，必须 stop 后重放才能出声。
+	# 已在用户手势后正常播放时不打断，避免进游戏时音乐从头重启。
+	if _bgm_kicked and bgm_player.playing:
+		bgm_player.volume_db = BGM_VOLUME_DB
+		return
+	# 浏览器在首次手势前挂起 AudioContext：先静音起播，让解码与上下文尽早就绪；
+	# 首个手势只解除静音（不 stop/play），避免重启空白与从头开始。
 	bgm_player.stop()
+	if _bgm_kicked:
+		bgm_player.volume_db = BGM_VOLUME_DB
+	else:
+		bgm_player.volume_db = MUTE_DB
 	bgm_player.play()
 
 func stop_bgm():
 	bgm_on = false
 	bgm_player.stop()
 
-# 浏览器自动播放策略兜底：首个「真实手势」（鼠标按下/按键/触摸）后，再强制重启一次 BGM。
-# 只在第一次触发，避免每个输入都重头播放。对文件模式与合成兜底模式都生效。
+# 浏览器自动播放策略兜底：首个真实手势后立即解除静音（不重启播放，零空白）。
+# 之后每次手势只检查播放器是否被挂起（切后台回来等），不重置播放位置。
+# 对文件模式与合成兜底模式都生效。
 func _input(event: InputEvent):
-	if not bgm_on or _bgm_kicked:
+	if not bgm_on:
 		return
 	var gesture := false
 	if event is InputEventMouseButton:
@@ -128,7 +144,12 @@ func _input(event: InputEvent):
 		gesture = (event as InputEventKey).pressed
 	elif event is InputEventScreenTouch:
 		gesture = (event as InputEventScreenTouch).pressed
-	if gesture:
+	elif event is InputEventScreenDrag:
+		gesture = true
+	if not gesture:
+		return
+	if not _bgm_kicked:
 		_bgm_kicked = true
-		bgm_player.stop()
+		bgm_player.volume_db = BGM_VOLUME_DB
+	if not bgm_player.playing:
 		bgm_player.play()
