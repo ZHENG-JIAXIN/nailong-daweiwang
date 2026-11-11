@@ -9,8 +9,11 @@ var velocity: Vector2 = Vector2.ZERO
 var life: float = 1.4
 var _age: float = 0.0
 var _hit: bool = false
+var size_mult: float = 1.0
+var owner_player: Player = null
 
-func setup(p_pos: Vector2, p_dir: Vector2, p_dmg: float, p_speed: float, p_life: float):
+func setup(p_pos: Vector2, p_dir: Vector2, p_dmg: float, p_speed: float, p_life: float, p_size: float = 1.0):
+	size_mult = p_size
 	global_position = p_pos
 	damage = p_dmg
 	speed = p_speed
@@ -21,7 +24,7 @@ func setup(p_pos: Vector2, p_dir: Vector2, p_dmg: float, p_speed: float, p_life:
 		velocity = Vector2(speed, 0.0)
 	rotation = velocity.angle()
 	var shape: CircleShape2D = CircleShape2D.new()
-	shape.radius = 6.0
+	shape.radius = 6.0 * size_mult
 	var cs: CollisionShape2D = CollisionShape2D.new()
 	cs.name = "Col"
 	cs.shape = shape
@@ -40,6 +43,8 @@ func _on_hit(area):
 		if fish != null and is_instance_valid(fish):
 			_hit = true
 			fish.take_damage(damage)
+			if owner_player != null and is_instance_valid(owner_player):
+				owner_player.on_dealt_damage(damage)
 			queue_free()
 
 func _process(delta: float):
@@ -60,8 +65,11 @@ func _draw():
 		outline = Color(1.0, 1.0, 1.0, 0.95)
 		core = Color(1.0, 0.85, 0.25)
 		trail_col = Color(1.0, 0.90, 0.55, 0.55)
+	var r1: float = 6.5 * size_mult
+	var r2: float = 4.6 * size_mult
+	var r3: float = 2.0 * size_mult
 	var tail: Vector2 = -velocity.normalized() * 18.0
-	draw_line(Vector2.ZERO, tail, trail_col, 5.0)
-	draw_circle(Vector2.ZERO, 6.5, outline)
-	draw_circle(Vector2.ZERO, 4.6, core)
-	draw_circle(Vector2.ZERO, 2.0, Color.WHITE)
+	draw_line(Vector2.ZERO, tail, trail_col, 5.0 * size_mult)
+	draw_circle(Vector2.ZERO, r1, outline)
+	draw_circle(Vector2.ZERO, r2, core)
+	draw_circle(Vector2.ZERO, r3, Color.WHITE)

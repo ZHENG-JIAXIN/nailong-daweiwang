@@ -5,6 +5,12 @@ class_name Player
 
 const BulletScript := preload("res://bullet.gd")
 
+# 礼包效果参数（所有效果上限 10 秒，见 design/gdd/gift-mechanic-spec.md）
+const GIFT_DURATION: float = 10.0
+const GIFT_LIFESTEAL: float = 0.15
+const GIFT_BULLET_SCALE: float = 1.8
+const GIFT_DEBUFF_DAMAGE_MULT: float = 0.5
+
 var radius: float = 20.0
 var speed: float = 260.0
 var dead: bool = false
@@ -32,6 +38,14 @@ var touch_aim_dir: Vector2 = Vector2(1.0, 0.0)
 var aim_dir: Vector2 = Vector2(1.0, 0.0)
 var _iframes: float = 0.0
 var _swing_timer: float = 0.0
+
+# 礼包效果状态：一个 effect + 一组乘性系数，清空即恢复原状态
+var gift_effect: String = ""
+var gift_timer: float = 0.0
+var gift_bullet_scale: float = 1.0
+var gift_damage_mult: float = 1.0
+var gift_dot_cap: float = 0.0
+var gift_dot_total: float = 0.0
 
 # 角色增益系数（随吞噬成长放大）
 var char_reload_mult: float = 1.0
@@ -208,7 +222,7 @@ func grow(amount: float):
 	apply_buffs()
 
 func take_damage(dmg: float):
-	if _iframes > 0.0 or dead:
+	if gift_effect == "invincible" or _iframes > 0.0 or dead:
 		return
 	hp -= dmg
 	_iframes = 0.4
@@ -219,6 +233,56 @@ func take_damage(dmg: float):
 
 func heal(a: float):
 	hp = minf(max_hp, hp + a)
+
+# ---- 礼包效果（仅一种生效，10 秒后自动恢复）----
+func apply_gift_effect(effect: String):
+	clear_gift_effect()
+	gift_effect = effect
+	gift_timer = GIFT_DURATION
+	match effect:
+		"big_bullet":
+			gift_bullet_scale = GIFT_BULLET_SCALE
+		"dot":
+			gift_dot_cap = hp * 0.5
+			gift_dot_total = 0.0
+		"explosion":
+			hp = maxf(0.0, hp - max_hp * 0.2)
+			gift_damage_mult = GIFT_DEBUFF_DAMAGE_MULT
+			if hp <= 0.0:
+				dead = true
+	queue_redraw()
+
+func clear_gift_effect():
+	gift_effect = ""
+	gift_timer = 0.0
+	gift_bullet_scale = 1.0
+	gift_damage_mult = 1.0
+	gift_dot_cap = 0.0
+	gift_dot_total = 0.0
+	queue_redraw()
+
+func on_dealt_damage(dmg: float):
+	if gift_effect == "lifesteal":
+		heal(dmg * GIFT_LIFESTEAL)
+
+func _tick_gift_dot(delta: float):
+	if gift_dot_cap <= 0.0:
+		return
+	var amount: float = minf(gift_dot_cap / GIFT_DURATION * delta, gift_dot_cap - gift_dot_total)
+	if amount <= 0.0:
+		return
+	hp = maxf(0.0, hp - amount)
+	gift_dot_total += amount
+
+func gift_display_name() -> String:
+	match gift_effect:
+		"lifesteal": return "吸血 15%"
+		"big_bullet": return "子弹变大"
+		"invincible": return "无敌金身"
+		"dot": return "持续扣血"
+		"explosion": return "爆炸 · 伤害减半"
+		_: return ""
+	return ""
 
 func switch_weapon(i: int):
 	if i < 0 or i >= WEAPONS.size() or i == weapon_index:
@@ -249,10 +313,12 @@ func fire_bullet():
 	var dmg: float = float(w["dmg"])
 	if char_id == 1:
 		dmg *= char_ranged_dmg_mult
+	dmg *= gift_damage_mult
 	var spread: float = float(w["spread"])
 	var dir: Vector2 = aim_dir.rotated(randf_range(-spread, spread))
 	var life: float = float(w["range"])
-	b.setup(global_position + dir * (radius + 8.0), dir, dmg, float(w["speed"]), life)
+	b.setup(global_position + dir * (radius + 8.0), dir, dmg, float(w["speed"]), life, gift_bullet_scale)
+	b.owner_player = self
 	var parent: Node = get_parent()
 	if parent != null:
 		parent.add_child(b)
@@ -260,7 +326,7 @@ func fire_bullet():
 func swing():
 	_swing_timer = 0.18
 	var w: Dictionary = WEAPONS[weapon_index]
-	var dmg: float = float(w["dmg"]) * char_melee_dmg_mult
+	var dmg: float = float(w["dmg"]) * char_melee_dmg_mult * gift_damage_mult
 	var center: Vector2 = global_position
 	var aim: float = aim_dir.angle()
 	var arc: float = float(w["arc"])
@@ -276,6 +342,7 @@ func swing():
 		var diff: float = absf(angle_difference(aim, d.angle()))
 		if diff <= arc * 0.5:
 			var killed: bool = fish.take_damage(dmg)
+			on_dealt_damage(dmg)
 			if killed and char_id == 2:
 				heal(heal_on_kill)
 	queue_redraw()
@@ -311,6 +378,12 @@ func _process(delta: float):
 		if to_m.length() > 1.0:
 			aim_dir = to_m.normalized()
 	# 计时器
+	if gift_timer > 0.0:
+		gift_timer -= delta
+		if gift_effect == "dot":
+			_tick_gift_dot(delta)
+		if gift_timer <= 0.0:
+			clear_gift_effect()
 	if _iframes > 0.0:
 		_iframes -= delta
 	if _swing_timer > 0.0:

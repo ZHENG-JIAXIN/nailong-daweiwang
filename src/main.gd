@@ -5,6 +5,13 @@ extends Node2D
 
 const PlayerScript := preload("res://player.gd")
 const FishScript := preload("res://fish.gd")
+const GiftScript := preload("res://gift.gd")
+
+# 随机礼包（见 design/gdd/gift-mechanic-spec.md）
+const GIFT_INTERVAL: float = 20.0
+const GIFT_LIFETIME: float = 8.0
+const GIFTS_BUFF: Array[String] = ["lifesteal", "big_bullet", "invincible"]
+const GIFTS_DEBUFF: Array[String] = ["dot", "explosion"]
 
 # 难度：pred 捕食者概率 / psmin-psmax 捕食者基础速度 / chase 追猎倍率 /
 # crange 追猎范围 / spawn 生成间隔 / fee 入场费 / fmin-fmax 食物速度
@@ -43,6 +50,11 @@ var boss_threshold_score: int = 800
 var boss_threshold_kills: int = 25
 var current_boss: Fish = null
 var audio: AudioPlayer
+
+# 随机礼包
+var gift_timer: float = GIFT_INTERVAL
+var current_gift: Gift = null
+var lbl_gift: Label
 
 # UI 引用
 var lbl_size: Label
@@ -173,6 +185,14 @@ func build_ui():
 	hud.add_child(lbl_hp)
 	hud.add_child(lbl_weapon)
 	hud.add_child(lbl_ammo)
+
+	# 礼包效果提示独立放底部，避免与顶部 HUD / 武器快捷栏(y=214)重叠
+	lbl_gift = mk_label("", 24, Color(1.0, 0.85, 0.3))
+	lbl_gift.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl_gift.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	lbl_gift.offset_top = -110
+	lbl_gift.offset_bottom = -60
+	ui.add_child(lbl_gift)
 
 	# 菜单
 	menu_center = CenterContainer.new()
@@ -725,6 +745,10 @@ func start_game():
 	kill_count = 0
 	boss_threshold_score = 800
 	boss_threshold_kills = 25
+	gift_timer = GIFT_INTERVAL
+	current_gift = null
+	if lbl_gift:
+		lbl_gift.text = ""
 	current_boss = null
 	if boss_bar:
 		boss_bar.visible = false
@@ -788,6 +812,15 @@ func spawn_fish():
 func _on_player_area_entered(area):
 	if state != "playing":
 		return
+	if area.is_in_group("gift"):
+		var g: Gift = area as Gift
+		if g != null and is_instance_valid(g) and not g.opened:
+			g.opened = true
+			g.queue_free()
+			current_gift = null
+			# 放在移除之后：爆炸减益可能致死，game_over() 会清场，避免重复释放
+			_open_gift()
+		return
 	if area.is_in_group("fish"):
 		var fish := area as Fish
 		var fr: float = fish.radius
@@ -807,6 +840,43 @@ func _on_player_area_entered(area):
 			if player.hp <= 0.0:
 				game_over()
 
+func spawn_gift():
+	if player == null or not is_instance_valid(player):
+		return
+	if current_gift != null and is_instance_valid(current_gift):
+		return
+	var v: Vector2 = get_viewport_rect().size
+	var pos: Vector2 = Vector2.ZERO
+	for i in range(12):
+		# Y 下限 290：避开顶部 HUD 与武器快捷栏(y=214~270)，不被按钮遮住
+		var p: Vector2 = Vector2(randf_range(80.0, v.x - 80.0), randf_range(290.0, v.y - 160.0))
+		if p.distance_to(player.global_position) > 140.0:
+			pos = p
+			break
+	if pos == Vector2.ZERO:
+		pos = Vector2(v.x * 0.5, v.y * 0.4)
+	var g: Gift = GiftScript.new()
+	g.setup(pos, GIFT_LIFETIME)
+	fish_layer.add_child(g)
+	current_gift = g
+	show_level_banner("限时礼包出现！（8 秒）")
+
+func _open_gift():
+	if player == null or not is_instance_valid(player):
+		return
+	var effect: String = ""
+	if randf() < 0.9:
+		effect = GIFTS_BUFF[randi() % GIFTS_BUFF.size()]
+	else:
+		effect = GIFTS_DEBUFF[randi() % GIFTS_DEBUFF.size()]
+	player.apply_gift_effect(effect)
+	show_level_banner("礼包：" + player.gift_display_name() + "（10 秒）")
+	if audio != null:
+		audio.play_eat()
+	# 爆炸减益可能直接致死，需立即结算
+	if player.dead:
+		game_over()
+
 func check_progress():
 	if state == "playing" and level_score >= level_target:
 		level_clear()
@@ -815,6 +885,11 @@ func check_progress():
 func level_clear():
 	state = "levelclear"
 	spawn_timer.stop()
+	if player != null and is_instance_valid(player):
+		player.clear_gift_effect()
+	current_gift = null
+	if lbl_gift:
+		lbl_gift.text = ""
 	# 清场，避免结算期间继续受伤 / BOSS 血条残留
 	for f in fish_layer.get_children():
 		f.queue_free()
@@ -853,6 +928,12 @@ func next_level():
 	level_score = 0
 	level_kills = 0
 	level_target = 300 + 200 * (level_index - 1)
+	gift_timer = GIFT_INTERVAL
+	current_gift = null
+	if lbl_gift:
+		lbl_gift.text = ""
+	if player != null and is_instance_valid(player):
+		player.clear_gift_effect()
 	var nl: Dictionary = LEVELS[current_level]
 	var nbgc: Color = nl["bg"]
 	_apply_bg(nbgc)
@@ -977,6 +1058,10 @@ func update_combat_hud():
 	else:
 		lbl_ammo.text = "弹药: 近战（无限）"
 	lbl_weapon.text = "武器: " + str(w["name"]) + "  [下方按钮 / 1-4 切换 · R 换弹]"
+	if player.gift_effect != "":
+		lbl_gift.text = "礼包: %s  %.1fs" % [player.gift_display_name(), maxf(0.0, player.gift_timer)]
+	else:
+		lbl_gift.text = ""
 	if current_boss != null and is_instance_valid(current_boss):
 		boss_bar.visible = true
 		var ratio: float = clampf(current_boss.hp / current_boss.max_hp, 0.0, 1.0)
@@ -991,6 +1076,10 @@ func game_over():
 	state = "gameover"
 	spawn_timer.stop()
 	_clear_battlefield()
+	level_banner.visible = false
+	current_gift = null
+	if lbl_gift:
+		lbl_gift.text = ""
 	GameManager.record_score(score)
 	lbl_over.text = "游戏结束\n到达第 %d 关\n总分: %d\n最高分: %d" % [level_index, score, GameManager.best_score]
 	over_center.visible = true
@@ -1047,9 +1136,16 @@ func _on_quiz_close():
 	quiz_panel.visible = false
 	show_menu()
 
-func _process(_delta: float):
+func _process(delta: float):
 	if state == "playing" and player != null:
+		if player.dead:
+			game_over()
+			return
 		update_combat_hud()
+		gift_timer -= delta
+		if gift_timer <= 0.0:
+			gift_timer = GIFT_INTERVAL
+			spawn_gift()
 	if debug_label and state == "playing":
 		var fc := fish_layer.get_child_count()
 		var pr := 0
