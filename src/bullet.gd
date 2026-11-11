@@ -1,6 +1,6 @@
 extends Area2D
 class_name Bullet
-# Bullet —— 玩家远程武器发射的子弹；代码绘制发光弹体；命中 damageable(鱼/BOSS) 造成伤害后销毁
+# Bullet —— 玩家远程武器发射的子弹；按关卡背景亮度自适应对比配色；命中 damageable 造成伤害后销毁
 # 路径 res://bullet.gd
 
 var speed: float = 700.0
@@ -21,7 +21,7 @@ func setup(p_pos: Vector2, p_dir: Vector2, p_dmg: float, p_speed: float, p_life:
 		velocity = Vector2(speed, 0.0)
 	rotation = velocity.angle()
 	var shape: CircleShape2D = CircleShape2D.new()
-	shape.radius = 5.0
+	shape.radius = 6.0
 	var cs: CollisionShape2D = CollisionShape2D.new()
 	cs.name = "Col"
 	cs.shape = shape
@@ -50,8 +50,18 @@ func _process(delta: float):
 	if _age > life or global_position.x < -m or global_position.x > v.x + m or global_position.y < -m or global_position.y > v.y + m:
 		queue_free()
 
+# 双层描边结构：浅背景靠深色轮廓、深背景靠亮色轮廓，任意背景都能看清。
+# 配色规则见 design/gdd/bullet-visibility-spec.md；只在 setup() 后绘制一次。
 func _draw():
-	var tail: Vector2 = -velocity.normalized() * 12.0
-	draw_line(Vector2.ZERO, tail, Color(1.0, 0.95, 0.45, 0.5), 3.0)
-	draw_circle(Vector2.ZERO, 4.5, Color(1.0, 0.9, 0.3))
-	draw_circle(Vector2.ZERO, 2.2, Color.WHITE)
+	var outline: Color = Color(0.06, 0.09, 0.18)
+	var core: Color = Color(1.0, 0.55, 0.10)
+	var trail_col: Color = Color(0.15, 0.12, 0.30, 0.65)
+	if not GameManager.bg_is_light:
+		outline = Color(1.0, 1.0, 1.0, 0.95)
+		core = Color(1.0, 0.85, 0.25)
+		trail_col = Color(1.0, 0.90, 0.55, 0.55)
+	var tail: Vector2 = -velocity.normalized() * 18.0
+	draw_line(Vector2.ZERO, tail, trail_col, 5.0)
+	draw_circle(Vector2.ZERO, 6.5, outline)
+	draw_circle(Vector2.ZERO, 4.6, core)
+	draw_circle(Vector2.ZERO, 2.0, Color.WHITE)

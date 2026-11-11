@@ -20,6 +20,7 @@ const LEVELS: Array[Dictionary] = [
 	{"name":"深渊秘境","bg":Color(0.12,0.22,0.42),"target":1600},
 ]
 const CHARACTERS: Array[String] = ["奶龙","噜噜","奶娃"]
+const WEAPON_SHORT: Array[String] = ["M4A1", "巴雷特", "军刀", "战斧"]
 
 var player: Player
 var fish_layer: Node2D
@@ -28,10 +29,14 @@ var bg: ColorRect
 var hud: VBoxContainer
 var spawn_timer: Timer
 
-var state := "login"   # login | menu | playing | gameover
+var state := "login"   # login | menu | playing | levelclear | gameover
 var score := 0
 var selected_diff: int = 1
-var current_level: int = 0
+var level_index: int = 1        # 第几关，无上限
+var current_level: int = 0      # 主题索引 = (level_index-1) % LEVELS.size()
+var level_score: int = 0        # 本关得分（过关判定用）
+var level_kills: int = 0        # 本关击杀
+var level_target: int = 300     # 本关目标
 var win_mode: bool = false
 var kill_count: int = 0
 var boss_threshold_score: int = 800
@@ -76,6 +81,16 @@ var char_btns: Array[Button] = []
 var level_banner: CenterContainer
 var lbl_level_banner: Label
 var level_banner_timer: Timer
+
+# 武器快捷栏与过关结算面板
+var weapon_bar: HBoxContainer
+var weapon_btns: Array[Button] = []
+var level_clear_panel: CenterContainer
+var lbl_clear_title: Label
+var lbl_clear_stats: Label
+var lbl_clear_grade: Label
+var lbl_clear_reward: Label
+var btn_next_level: Button
 
 # 双浮动摇杆：左右半屏各按 InputEventScreenTouch.index 追踪一根手指
 # BASE_R 需与 joystick_overlay.gd 的 BASE_R 保持一致
@@ -265,6 +280,51 @@ func build_ui():
 	btn_qclose.pressed.connect(_on_quiz_close)
 	qv.add_child(btn_qclose)
 
+	# 武器快捷栏（HUD 下方一行，PC 可点 / 移动端可触摸，1-4 键保留）
+	weapon_bar = HBoxContainer.new()
+	weapon_bar.position = Vector2(28.0, 214.0)
+	weapon_bar.custom_minimum_size = Vector2(664.0, 56.0)
+	weapon_bar.add_theme_constant_override("separation", 8)
+	weapon_bar.visible = false
+	ui.add_child(weapon_bar)
+	for i in range(WEAPON_SHORT.size()):
+		var wb: Button = mk_button(WEAPON_SHORT[i], 160, 56)
+		wb.mouse_filter = Control.MOUSE_FILTER_STOP
+		wb.pressed.connect(_on_weapon_pressed.bind(i))
+		weapon_bar.add_child(wb)
+		weapon_btns.append(wb)
+
+	# 过关结算面板（无尽关卡：达标 -> 结算 -> 主动继续）
+	level_clear_panel = CenterContainer.new()
+	level_clear_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	level_clear_panel.visible = false
+	level_clear_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	ui.add_child(level_clear_panel)
+	var cp_bg := ColorRect.new()
+	cp_bg.color = Color(0, 0, 0, 0.72)
+	cp_bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	cp_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	level_clear_panel.add_child(cp_bg)
+	var cv := VBoxContainer.new()
+	cv.add_theme_constant_override("separation", 18)
+	cv.custom_minimum_size = Vector2(640, 520)
+	level_clear_panel.add_child(cv)
+	lbl_clear_title = mk_label("", 46, Color(1.0, 0.92, 0.4))
+	lbl_clear_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cv.add_child(lbl_clear_title)
+	lbl_clear_stats = mk_label("", 26, Color.WHITE)
+	lbl_clear_stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cv.add_child(lbl_clear_stats)
+	lbl_clear_grade = mk_label("", 40, Color(0.6, 0.95, 1.0))
+	lbl_clear_grade.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cv.add_child(lbl_clear_grade)
+	lbl_clear_reward = mk_label("", 26, Color(1.0, 0.85, 0.3))
+	lbl_clear_reward.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cv.add_child(lbl_clear_reward)
+	btn_next_level = mk_button("继续下一关 →", 420, 76)
+	btn_next_level.pressed.connect(_on_next_level_pressed)
+	cv.add_child(btn_next_level)
+
 	# 过关横幅
 	level_banner = CenterContainer.new()
 	level_banner.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -312,7 +372,7 @@ func build_ui():
 	boss_bar.add_child(boss_bar_label)
 
 	# 游戏内提示 & 调试标签
-	hint_label = mk_label("WASD/方向键移动 · 鼠标瞄准 · 左键开火 · 1-4 切武器 · R 换弹｜手机：左右半屏按住出摇杆，左移动 / 右瞄准开火", 18, Color(0.1, 0.2, 0.35))
+	hint_label = mk_label("WASD/方向键移动 · 鼠标瞄准 · 左键开火 · 下方按钮或 1-4 切武器 · R 换弹｜手机：左右半屏按住出摇杆，左移动 / 右瞄准开火", 18, Color(0.1, 0.2, 0.35))
 	hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	hint_label.offset_top = -56
@@ -456,6 +516,9 @@ func _handle_touch(event: InputEvent):
 		_sync_joysticks()
 		return
 	# 新手指按落点分左右，每侧只认第一根；双指先后顺序任意
+	# 武器快捷栏区域由按钮自身消化，不生成摇杆
+	if _point_over_weapon_bar(p):
+		return
 	var half: float = get_viewport_rect().size.x * 0.5
 	if p.x < half and left_idx == -1:
 		left_idx = idx
@@ -532,9 +595,9 @@ func refresh_menu():
 func refresh_hud():
 	var lvl: Dictionary = LEVELS[current_level]
 	lbl_size.text = "尺寸: %d" % int(player.radius)
-	lbl_score.text = "分数: %d / %d" % [score, int(lvl["target"])]
+	lbl_score.text = "本关: %d / %d   总分: %d" % [level_score, level_target, score]
 	lbl_coins.text = "奶龙币: %d" % GameManager.coins
-	lbl_level.text = "关卡 %d/%d  %s" % [current_level + 1, LEVELS.size(), lvl["name"]]
+	lbl_level.text = "第 %d 关 · %s" % [level_index, str(lvl["name"])]
 	lbl_hp.text = "生命: %d/%d" % [int(maxf(0.0, player.hp)), int(player.max_hp)]
 
 func show_menu():
@@ -542,6 +605,8 @@ func show_menu():
 	hud.visible = false
 	hint_label.visible = false
 	_reset_joysticks(false)
+	weapon_bar.visible = false
+	level_clear_panel.visible = false
 	level_banner.visible = false
 	login_center.visible = false
 	menu_center.visible = true
@@ -552,6 +617,8 @@ func show_login():
 	state = "login"
 	hud.visible = false
 	_reset_joysticks(false)
+	weapon_bar.visible = false
+	level_clear_panel.visible = false
 	menu_center.visible = false
 	over_center.visible = false
 	login_center.visible = true
@@ -609,10 +676,14 @@ func start_game():
 	if player and is_instance_valid(player):
 		player.queue_free()
 		player = null
+	level_index = 1
 	current_level = 0
+	level_score = 0
+	level_kills = 0
+	level_target = 300
 	win_mode = false
 	var start_bg: Color = LEVELS[0]["bg"]
-	bg.color = start_bg
+	_apply_bg(start_bg)
 	player = PlayerScript.new()
 	player.apply_character(GameManager.selected_char)
 	player.global_position = get_viewport_rect().size * 0.5
@@ -631,6 +702,9 @@ func start_game():
 	_reset_joysticks(true)
 	menu_center.visible = false
 	over_center.visible = false
+	level_clear_panel.visible = false
+	weapon_bar.visible = true
+	_refresh_weapon_bar()
 	level_banner.visible = false
 	refresh_hud()
 	spawn_timer.wait_time = float(DIFFS[selected_diff]["spawn"])
@@ -655,8 +729,8 @@ func spawn_fish():
 		3: pos = Vector2(v.x + 40.0, randf() * v.y)
 	f.global_position = pos
 	var d: Dictionary = DIFFS[selected_diff]
-	var lvl_scale: float = 1.0 + 0.1 * float(current_level)
-	var pred_chance: float = min(0.78, float(d["pred"]) + 0.05 * float(current_level))
+	var lvl_scale: float = minf(2.8, 1.0 + 0.08 * float(level_index - 1))
+	var pred_chance: float = minf(0.82, float(d["pred"]) + 0.04 * float(level_index - 1))
 	var r: float
 	var col: Color
 	var is_pred: bool = false
@@ -687,7 +761,9 @@ func _on_player_area_entered(area):
 		var fr: float = fish.radius
 		if player.radius > fr * 1.15:
 			player.grow(1.4 + fr * 0.045)
-			score += 10 + int(fr)
+			var gained: int = 10 + int(fr)
+			score += gained
+			level_score += gained
 			fish.queue_free()
 			if audio != null:
 				audio.play_eat()
@@ -700,17 +776,103 @@ func _on_player_area_entered(area):
 				game_over()
 
 func check_progress():
-	var lvl: Dictionary = LEVELS[current_level]
-	if score >= int(lvl["target"]):
-		if current_level < LEVELS.size() - 1:
-			current_level += 1
-			var nl: Dictionary = LEVELS[current_level]
-			var bgc: Color = nl["bg"]
-			bg.color = bgc
-			show_level_banner("进入关卡 %d：%s" % [current_level + 1, nl["name"]])
-			refresh_hud()
+	if state == "playing" and level_score >= level_target:
+		level_clear()
+
+# 无尽关卡：达标进入结算，玩家点「继续」才推进；死亡才最终结算。
+func level_clear():
+	state = "levelclear"
+	spawn_timer.stop()
+	# 清场，避免结算期间继续受伤 / BOSS 血条残留
+	for f in fish_layer.get_children():
+		f.queue_free()
+	current_boss = null
+	if boss_bar:
+		boss_bar.visible = false
+	level_banner.visible = false
+	hint_label.visible = false
+	weapon_bar.visible = false
+	_reset_joysticks(false)
+	var hp_ratio: float = 0.0
+	if player != null and is_instance_valid(player):
+		hp_ratio = player.hp / player.max_hp
+	var over: int = int(float(level_target) * 1.2)
+	var grade: String = "B"
+	if hp_ratio >= 0.8 and level_score >= over:
+		grade = "S"
+	elif hp_ratio >= 0.5 or level_score >= over:
+		grade = "A"
+	var reward: int = 10 + 5 * (level_index - 1)
+	GameManager.add_coins(reward)
+	lbl_clear_title.text = "第 %d 关 完成" % level_index
+	lbl_clear_stats.text = "本关得分 %d / %d\n本关击杀 %d\n累计总分 %d\n剩余生命 %d%%" % [level_score, level_target, level_kills, score, int(hp_ratio * 100.0)]
+	lbl_clear_grade.text = "评价  " + grade
+	lbl_clear_reward.text = "奖励 +%d 奶龙币" % reward
+	btn_next_level.text = "继续第 %d 关 →" % (level_index + 1)
+	level_clear_panel.visible = true
+	refresh_hud()
+
+func _on_next_level_pressed():
+	next_level()
+
+func next_level():
+	level_index += 1
+	current_level = (level_index - 1) % LEVELS.size()
+	level_score = 0
+	level_kills = 0
+	level_target = 300 + 200 * (level_index - 1)
+	var nl: Dictionary = LEVELS[current_level]
+	var nbgc: Color = nl["bg"]
+	_apply_bg(nbgc)
+	for f in fish_layer.get_children():
+		f.queue_free()
+	current_boss = null
+	if boss_bar:
+		boss_bar.visible = false
+	boss_threshold_score = score + 600
+	boss_threshold_kills = kill_count + 15
+	state = "playing"
+	level_clear_panel.visible = false
+	hint_label.visible = true
+	weapon_bar.visible = true
+	_refresh_weapon_bar()
+	_reset_joysticks(true)
+	spawn_timer.wait_time = maxf(0.22, float(DIFFS[selected_diff]["spawn"]) - 0.01 * float(level_index - 1))
+	for i in range(16):
+		spawn_fish()
+	spawn_timer.start()
+	show_level_banner("第 %d 关 · %s" % [level_index, str(nl["name"])])
+	refresh_hud()
+	# 每 3 关开场强制 BOSS，形成阶段高潮
+	if level_index % 3 == 0:
+		spawn_boss()
+
+# 背景切换时同步子弹对比配色标志（autoload 运行时字段，不进存档）
+func _apply_bg(c: Color):
+	bg.color = c
+	var lum: float = c.r * 0.299 + c.g * 0.587 + c.b * 0.114
+	GameManager.bg_is_light = (lum > 0.62)
+
+func _on_weapon_pressed(i: int):
+	if state != "playing" or player == null:
+		return
+	player.switch_weapon(i)
+	_refresh_weapon_bar()
+
+func _refresh_weapon_bar():
+	for i in range(weapon_btns.size()):
+		var b: Button = weapon_btns[i]
+		if player != null and i == player.weapon_index:
+			b.modulate = Color(1.0, 0.82, 0.35)
+			b.text = "✔ " + WEAPON_SHORT[i]
 		else:
-			game_win()
+			b.modulate = Color.WHITE
+			b.text = WEAPON_SHORT[i]
+
+func _point_over_weapon_bar(p: Vector2) -> bool:
+	if weapon_bar == null or not weapon_bar.visible:
+		return false
+	return weapon_bar.get_global_rect().has_point(p)
 
 func show_level_banner(text: String):
 	lbl_level_banner.text = text
@@ -725,17 +887,20 @@ func _on_fish_died(fish: Fish):
 		return
 	if fish.is_boss:
 		score += 400
+		level_score += 400
 		GameManager.add_coins(30)
 		current_boss = null
 		if boss_bar:
 			boss_bar.visible = false
-		boss_threshold_score = score + 1000
-		boss_threshold_kills = kill_count + 30
+		boss_threshold_score = score + 600
+		boss_threshold_kills = kill_count + 15
 	else:
 		var ks: int = 5 + int(fish.radius) * 2
 		score += ks
+		level_score += ks
 		GameManager.add_coins(1 + int(fish.radius / 10))
 	kill_count += 1
+	level_kills += 1
 	refresh_hud()
 	check_progress()
 	_try_spawn_boss()
@@ -776,7 +941,7 @@ func update_combat_hud():
 		lbl_ammo.text = "弹药: %d/%d %s" % [player.ammo, int(w["mag"]), st]
 	else:
 		lbl_ammo.text = "弹药: 近战（无限）"
-	lbl_weapon.text = "武器: " + str(w["name"]) + "  [1-4切换 R换弹]"
+	lbl_weapon.text = "武器: " + str(w["name"]) + "  [下方按钮 / 1-4 切换 · R 换弹]"
 	if current_boss != null and is_instance_valid(current_boss):
 		boss_bar.visible = true
 		var ratio: float = clampf(current_boss.hp / current_boss.max_hp, 0.0, 1.0)
@@ -794,9 +959,11 @@ func game_over():
 		boss_bar.visible = false
 	current_boss = null
 	GameManager.record_score(score)
-	lbl_over.text = "游戏结束\n分数: %d\n最高分: %d" % [score, GameManager.best_score]
+	lbl_over.text = "游戏结束\n到达第 %d 关\n总分: %d\n最高分: %d" % [level_index, score, GameManager.best_score]
 	over_center.visible = true
 	hint_label.visible = false
+	weapon_bar.visible = false
+	level_clear_panel.visible = false
 	_reset_joysticks(false)
 	if audio != null:
 		audio.play_death()
@@ -869,6 +1036,10 @@ func _input(event):
 			return
 		var mb: InputEventMouseButton = event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT:
-			player.firing = mb.pressed
+			if mb.pressed:
+				# 点武器快捷栏只切枪，不误开火
+				player.firing = not _point_over_weapon_bar(mb.position)
+			else:
+				player.firing = false
 	elif event is InputEventScreenTouch or event is InputEventScreenDrag:
 		_handle_touch(event)

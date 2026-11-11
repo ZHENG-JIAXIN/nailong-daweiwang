@@ -45,6 +45,10 @@ var best_score := 0
 var selected_char := 0
 var users: Array[String] = []
 
+# 运行时标志：当前关卡背景是浅色还是深色，供 bullet.gd 选对比配色。
+# 不写入存档（每次开局由 main.gd 按背景色重算）。
+var bg_is_light := true
+
 func _ready():
 	ensure_dirs()
 	load_index()

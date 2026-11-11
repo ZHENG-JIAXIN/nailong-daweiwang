@@ -171,6 +171,40 @@ Godot 导出的 `fileSizes` 本来就正确。改成 gz 大小后 `loaded` 迅�
 `fileSizes.index.wasm = 39514754`，重新部署后线上会恢复正确值。
 脚本文件头已写死这条禁令，避免再犯。
 
-**质量门：CONCERNS** — 预压缩同步已就绪，进度条需重新部署后复验。
-整体仍开着，剩余：① 跨境链路与手机 WASM 编译（方案 B / C，用户暂未选）
-② 双浮动摇杆双端真人实测 ③ 撤销后重新部署、确认线上 `fileSizes` 恢复 39514754。
+**线上复验（15:30，PASS）** — 提交 `fix: 撤销 fileSizes 修正, 恢复 Godot 原值` 后：
+- 线上 `index.html` 的 `fileSizes.index.wasm = 39514754`（已恢复 Godot 原值）
+- 线上 `/index.wasm` 仍返回 `Content-Encoding: gzip` /
+  `Content-Length: 10084286` / `Content-Type: application/wasm`（压缩链路未受影响）
+- 本地 gz 与线上一致：`10084286` bytes、sha256 `ffa4b293…`
+
+**质量门：CONCERNS** — 回归已修复并复验 PASS；整体仍开着，剩余：
+① 跨境链路与手机 WASM 编译（方案 B / C，用户暂未选）
+② 双浮动摇杆双端真人实测 ③ 用户手机端确认进度条恢复正常、游戏能进入。
+
+---
+
+## 追加：无尽关卡制 + 武器快捷栏 + 子弹可见性（2026-11-11 · 方案 A）
+
+**问题**：旧版 3 关累计分数达标即 `game_win()` 结束，没有持续目标与单关反馈；
+移动端无法切武器；浅色关卡背景上子弹（白芯 + 淡黄拖尾）几乎看不见。
+
+| 文件 | 改动 |
+|---|---|
+| `design/gdd/level-progression-spec.md` | **新增** 无尽关卡规格：独立目标、难度曲线、结算评价、BOSS 节奏、验收标准 |
+| `design/gdd/bullet-visibility-spec.md` | **新增** 子弹对比度规格：亮度判据、双层描边配色、尺寸 |
+| `src/main.gd` | 新增 `level_index / level_score / level_kills / level_target` 与 `levelclear` 状态；得分双记；`level_clear()` 结算面板（统计 / S-A-B 评价 / 奖励币 / 继续按钮）；`next_level()` 三主题循环 + 每 3 关强制 BOSS；难度按关数递增并封顶；HUD 下方 4 个武器快捷按钮；`_point_over_weapon_bar()` 排除摇杆与 PC 开火误触；`_apply_bg()` 同步背景亮度 |
+| `src/bullet.gd` | 自适应双层描边（浅背景深描边 / 深背景亮描边），视觉半径 4.5→6.5、碰撞 5→6、拖尾加长 |
+| `src/game_manager.gd` | 新增运行时 `bg_is_light`（不进存档） |
+
+**关键设计**：死亡才最终结算（不再有「通关」终点）；每关目标 `300+200×(n-1)`；
+过关需玩家点「继续」才推进，保留自主感；`state` 相关函数全部有 `playing` 保护，
+结算期间不生成鱼、不掉血、不开火。
+
+**质量门：CONCERNS** — 本机无 Godot CLI，未做无头语法检查。阻塞项：
+① Godot 打开确认无 parse error
+② 按两份规格做双端实测（重点：连续 10 关、每 3 关 BOSS、
+武器按钮不生成摇杆、深浅背景子弹对比）
+③ 重新导出 Web + push 上线
+
+**已知风险**：武器栏 `y=214` 与顶部 HUD 末行接近，Godot 里若发现重叠需下调；
+`game_win()` 保留但不再接线；目标分数与难度公式为初版数值，待 Playtest 微调。
